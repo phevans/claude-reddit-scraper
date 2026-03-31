@@ -1,0 +1,6 @@
+flask
+praw
+beautifulsoup4
+python-dotenv
+pytest
+requests
