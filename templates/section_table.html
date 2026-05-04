@@ -1,0 +1,60 @@
+<h2 class="mt-4 mb-3">{{ section.name }}</h2>
+<table class="table table-striped table-hover">
+    <thead class="table-dark">
+        <tr>
+            <th class="text-center" style="width: 40px;">
+                <input type="checkbox" class="form-check-input section-select-all" title="Select all">
+            </th>
+            <th>Artists</th>
+            <th>Title</th>
+            <th>Label</th>
+            {% for service in all_services %}
+            <th class="text-center">{{ service }}</th>
+            {% endfor %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for release in section.releases %}
+        <tr>
+            <td class="text-center">
+                {% if "Beatport" in release.links %}
+                <input type="checkbox" class="form-check-input release-checkbox" data-beatport-url="{{ release.links['Beatport'] }}">
+                {% endif %}
+            </td>
+            <td>{{ release.artists }}</td>
+            <td>{{ release.title }}</td>
+            <td>{{ release.label }}</td>
+            {% for service in all_services %}
+            <td class="text-center">
+                {% if service in release.links %}
+                    {% if service == "Spotify" %}
+                        {% set match = release.spotify_match %}
+                        {% set fetched_title = release.spotify_title %}
+                    {% elif service == "Beatport" %}
+                        {% set match = release.beatport_match %}
+                        {% set fetched_title = release.beatport_title %}
+                    {% else %}
+                        {% set match = none %}
+                        {% set fetched_title = none %}
+                    {% endif %}
+
+                    {% if match is not none %}
+                        {% if match == 1.0 %}
+                        <a href="{{ release.links[service] }}" target="_blank" rel="noopener" class="btn btn-sm btn-success">{{ service }}</a>
+                        {% elif match >= 0.7 %}
+                        <a href="{{ release.links[service] }}" target="_blank" rel="noopener" class="btn btn-sm btn-warning">{{ service }} {{ "%.2f"|format(match) }}</a>
+                        <div class="small text-muted mt-1">{{ fetched_title }}</div>
+                        {% else %}
+                        <a href="{{ release.links[service] }}" target="_blank" rel="noopener" class="btn btn-sm btn-danger">{{ service }} {{ "%.2f"|format(match) }}</a>
+                        <div class="small text-muted mt-1">{{ fetched_title }}</div>
+                        {% endif %}
+                    {% else %}
+                    <a href="{{ release.links[service] }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">{{ service }}</a>
+                    {% endif %}
+                {% endif %}
+            </td>
+            {% endfor %}
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from bs4 import BeautifulSoup
 
 from models import Release, SubgenreSection
@@ -7,26 +9,29 @@ def parse_releases(html: str) -> list[SubgenreSection]:
     """Parse the 'New Releases' section of a New Music Monday post into structured data."""
     soup = BeautifulSoup(html, "html.parser")
 
-    # Find the "New Releases" heading
+    # Find the "New Releases" heading (any heading level)
     new_releases_heading = None
-    for h1 in soup.find_all("h1"):
-        if "New Releases" in h1.get_text():
-            new_releases_heading = h1
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        if "New Releases" in tag.get_text():
+            new_releases_heading = tag
             break
 
     if not new_releases_heading:
         return []
 
+    # Collect all elements after the "New Releases" heading in document order
     sections = []
     current_subgenre = None
+    heading_tags = {"h1", "h2", "h3", "h4", "h5", "h6"}
 
-    for sibling in new_releases_heading.find_next_siblings():
-        if sibling.name == "h3":
-            current_subgenre = SubgenreSection(name=sibling.get_text().strip())
+    for element in new_releases_heading.find_all_next():
+        if element.name in heading_tags and element != new_releases_heading:
+            current_subgenre = SubgenreSection(name=element.get_text().strip())
             sections.append(current_subgenre)
-        elif sibling.name == "ul" and current_subgenre is not None:
-            for li in sibling.find_all("li"):
-                release = _parse_release_item(li)
+        elif element.name == "li" and current_subgenre is not None:
+            # Only process <li> that are direct children of a <ul> (not nested)
+            if element.parent and element.parent.name == "ul":
+                release = _parse_release_item(element)
                 if release:
                     current_subgenre.releases.append(release)
 
