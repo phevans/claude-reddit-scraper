@@ -518,9 +518,17 @@
             btn.disabled = false;
 
             if (data.match === null || data.match === undefined) {
+                let rejectedHtml = '';
+                if (data.best_rejected) {
+                    const r = data.best_rejected;
+                    rejectedHtml = '<div class="prompt-details">Best result: ' +
+                        escapeHtml(r.artists || '') + ' — ' + escapeHtml(r.fetched_title || '') +
+                        ' (score: ' + (r.match || 0).toFixed(2) + ')</div>';
+                }
                 const msg = document.createElement('div');
                 msg.className = 'link-search-prompt';
                 msg.innerHTML = '<div class="prompt-title">No good Spotify match found</div>' +
+                    rejectedHtml +
                     '<div class="prompt-actions"><button class="btn btn-sm btn-outline-secondary" onclick="this.closest(\'.link-search-prompt\').remove()">Dismiss</button></div>';
                 linkBox.appendChild(msg);
                 return;

@@ -16,6 +16,7 @@ class Release:
     beatport_release_id: int | None = None
     beatport_track_ids: list[int] = field(default_factory=list)
     spotify_auto: bool = False
+    spotify_search_rejected: dict | None = None
 
 
 @dataclass

@@ -86,6 +86,9 @@
                         <button type="button" class="link-search-btn" onclick="searchSpotify(this)" title="Search Spotify">&#128269;</button>
                         <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Add Spotify link">&#9998;</button>
                     </div>
+                    {% if release.spotify_search_rejected %}
+                    <div class="link-match-score">Best match: {{ release.spotify_search_rejected.artists }} — {{ release.spotify_search_rejected.fetched_title }} ({{ "%.2f"|format(release.spotify_search_rejected.match) }})</div>
+                    {% endif %}
                 </div>
                 {% endif %}
             </td>

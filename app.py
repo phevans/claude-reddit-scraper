@@ -30,12 +30,14 @@ def _verify_release(release):
             release.beatport_match, release.beatport_title = result
 
     if not spotify_url:
-        found = _search_spotify_cascade(release.artists, release.title, beatport_url)
+        found, rejected = _search_spotify_cascade(release.artists, release.title, beatport_url)
         if found:
             release.links["Spotify"] = found["url"]
             release.spotify_match = found["match"]
             release.spotify_title = found["fetched_title"]
             release.spotify_auto = True
+        elif rejected:
+            release.spotify_search_rejected = rejected
 
     return release
 
@@ -146,8 +148,18 @@ def _best_match(results, release_artist, release_title):
 
 
 def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
-    """Run the cascading Spotify search. Returns a result dict or None."""
+    """Run the cascading Spotify search.
+
+    Returns (result_dict, best_rejected) where best_rejected is the
+    highest-scoring match that fell below threshold, or None.
+    """
     query = f"{artist} {title}".strip()
+    best_rejected = None
+
+    def _track_rejected(candidate):
+        nonlocal best_rejected
+        if candidate and (best_rejected is None or candidate["match"] > best_rejected["match"]):
+            best_rejected = dict(candidate)
 
     # Step 1: album search by artist + title
     results = search_spotify(query, "album")
@@ -156,7 +168,8 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
         if best and best["match"] >= threshold:
             best["source"] = "album_search"
             best["service"] = "Spotify"
-            return best
+            return best, best_rejected
+        _track_rejected(best)
 
     # Step 2: track search by artist + title
     results = search_spotify(query, "track")
@@ -168,7 +181,8 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
                 best["fetched_title"] = best.get("album_name", best["fetched_title"])
             best["source"] = "track_search"
             best["service"] = "Spotify"
-            return best
+            return best, best_rejected
+        _track_rejected(best)
 
     # Step 3: if beatport URL provided, scrape first track name and retry
     if beatport_url:
@@ -182,7 +196,8 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
                 if best and best["match"] >= threshold:
                     best["source"] = "beatport_track_album_search"
                     best["service"] = "Spotify"
-                    return best
+                    return best, best_rejected
+                _track_rejected(best)
 
             results = search_spotify(track_query, "track")
             if results:
@@ -193,9 +208,10 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
                         best["fetched_title"] = best.get("album_name", best["fetched_title"])
                     best["source"] = "beatport_track_search"
                     best["service"] = "Spotify"
-                    return best
+                    return best, best_rejected
+                _track_rejected(best)
 
-    return None
+    return None, best_rejected
 
 
 @app.route("/spotify/search", methods=["POST"])
@@ -207,10 +223,13 @@ def spotify_search():
     if not title:
         return jsonify({"error": "title is required"}), 400
 
-    result = _search_spotify_cascade(artist, title, beatport_url)
+    result, rejected = _search_spotify_cascade(artist, title, beatport_url)
     if result:
         return jsonify(result)
-    return jsonify({"service": "Spotify", "match": None, "error": "No good match found on Spotify"})
+    resp = {"service": "Spotify", "match": None, "error": "No good match found on Spotify"}
+    if rejected:
+        resp["best_rejected"] = rejected
+    return jsonify(resp)
 
 
 @app.route("/beatport/playlists")
