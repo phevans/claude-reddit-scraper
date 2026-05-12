@@ -3,11 +3,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 
-from beatport_client import verify_beatport_link
+from beatport_client import scrape_beatport_track_names, verify_beatport_link
 from beatport_playlist import add_tracks_to_playlist, get_my_playlists, get_track_ids
 from parser import parse_releases
 from reddit_client import get_latest_nmm_post
-from spotify_client import verify_spotify_link
+from spotify_client import compute_similarity, search_spotify, verify_spotify_link
 
 app = Flask(__name__)
 
@@ -120,6 +120,82 @@ def verify_link():
 
     match, fetched_title = result
     return jsonify({"service": service, "match": round(match, 4), "fetched_title": fetched_title})
+
+
+def _best_match(results, release_title):
+    """Find the best matching result from a Spotify search, comparing against release_title."""
+    best = None
+    for r in results:
+        score = compute_similarity(release_title, r["name"])
+        if best is None or score > best["match"]:
+            best = {"match": round(score, 4), "fetched_title": r["name"], "url": r.get("url", ""), "artists": r.get("artists", "")}
+            if "album_url" in r:
+                best["album_url"] = r["album_url"]
+                best["album_name"] = r.get("album_name", "")
+    return best
+
+
+@app.route("/spotify/search", methods=["POST"])
+def spotify_search():
+    data = request.get_json()
+    artist = data.get("artist", "")
+    title = data.get("title", "")
+    beatport_url = data.get("beatport_url", "")
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+
+    query = f"{artist} {title}".strip()
+    threshold = 0.6
+
+    # Step 1: album search by artist + title
+    results = search_spotify(query, "album")
+    if results:
+        best = _best_match(results, title)
+        if best and best["match"] >= threshold:
+            best["source"] = "album_search"
+            best["service"] = "Spotify"
+            return jsonify(best)
+
+    # Step 2: track search by artist + title
+    results = search_spotify(query, "track")
+    if results:
+        best = _best_match(results, title)
+        if best and best["match"] >= threshold:
+            if best.get("album_url"):
+                best["url"] = best["album_url"]
+                best["fetched_title"] = best.get("album_name", best["fetched_title"])
+            best["source"] = "track_search"
+            best["service"] = "Spotify"
+            return jsonify(best)
+
+    # Step 3: if beatport URL provided, scrape first track name and retry
+    if beatport_url:
+        track_names = scrape_beatport_track_names(beatport_url)
+        if track_names:
+            track_query = f"{artist} {track_names[0]}".strip()
+
+            # Step 3a: album search by artist + first beatport track
+            results = search_spotify(track_query, "album")
+            if results:
+                best = _best_match(results, title)
+                if best and best["match"] >= threshold:
+                    best["source"] = "beatport_track_album_search"
+                    best["service"] = "Spotify"
+                    return jsonify(best)
+
+            # Step 3b: track search by artist + first beatport track
+            results = search_spotify(track_query, "track")
+            if results:
+                best = _best_match(results, title)
+                if best and best["match"] >= threshold:
+                    if best.get("album_url"):
+                        best["url"] = best["album_url"]
+                        best["fetched_title"] = best.get("album_name", best["fetched_title"])
+                    best["source"] = "beatport_track_search"
+                    best["service"] = "Spotify"
+                    return jsonify(best)
+
+    return jsonify({"service": "Spotify", "match": None, "error": "No good match found on Spotify"})
 
 
 @app.route("/beatport/playlists")

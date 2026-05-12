@@ -99,6 +99,40 @@
             border: 1px solid #ced4da;
             color: #495057;
         }
+        .link-search-btn {
+            flex-shrink: 0;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0 2px;
+            font-size: 0.8rem;
+            opacity: 0.4;
+            line-height: 1;
+        }
+        .link-box:hover .link-search-btn {
+            opacity: 0.8;
+        }
+        .link-search-prompt {
+            margin-top: 4px;
+            padding: 6px 8px;
+            background: #f0f4ff;
+            border: 1px solid #b6d0fe;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        .link-search-prompt .prompt-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .link-search-prompt .prompt-details {
+            font-size: 0.75rem;
+            color: #495057;
+            margin-bottom: 6px;
+        }
+        .link-search-prompt .prompt-actions {
+            display: flex;
+            gap: 6px;
+        }
     </style>
 </head>
 <body>
@@ -443,6 +477,115 @@
                 linkBox.className = 'link-box link-match-poor mb-1';
             }
         });
+    }
+
+    async function searchSpotify(btn) {
+        const linkBox = btn.closest('.link-box');
+        const row = linkBox.closest('tr');
+        const artist = row.dataset.releaseArtists;
+        const title = row.dataset.releaseTitle;
+        const beatportUrl = row.dataset.beatportUrl || '';
+
+        btn.disabled = true;
+        const origText = btn.innerHTML;
+        btn.innerHTML = '&#8987;';
+
+        // Remove any existing prompt
+        const oldPrompt = linkBox.querySelector('.link-search-prompt');
+        if (oldPrompt) oldPrompt.remove();
+
+        try {
+            const resp = await fetch('/spotify/search', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({artist: artist, title: title, beatport_url: beatportUrl})
+            });
+            const data = await resp.json();
+
+            btn.innerHTML = origText;
+            btn.disabled = false;
+
+            if (data.match === null || data.match === undefined) {
+                const msg = document.createElement('div');
+                msg.className = 'link-search-prompt';
+                msg.innerHTML = '<div class="prompt-title">No good Spotify match found</div>' +
+                    '<div class="prompt-actions"><button class="btn btn-sm btn-outline-secondary" onclick="this.closest(\'.link-search-prompt\').remove()">Dismiss</button></div>';
+                linkBox.appendChild(msg);
+                return;
+            }
+
+            const prompt = document.createElement('div');
+            prompt.className = 'link-search-prompt';
+            prompt.innerHTML =
+                '<div class="prompt-title">Spotify match found (score: ' + data.match.toFixed(2) + ')</div>' +
+                '<div class="prompt-details">' +
+                    '<div><strong>' + escapeHtml(data.artists || '') + ' — ' + escapeHtml(data.fetched_title) + '</strong></div>' +
+                    '<div class="mt-1"><a href="' + escapeHtml(data.url) + '" target="_blank" rel="noopener">' + escapeHtml(data.url) + '</a></div>' +
+                    (data.source ? '<div class="mt-1 text-muted">Found via: ' + escapeHtml(data.source.replace(/_/g, ' ')) + '</div>' : '') +
+                '</div>' +
+                '<div class="prompt-actions">' +
+                    '<button class="btn btn-sm btn-success prompt-accept">Use this</button>' +
+                    '<button class="btn btn-sm btn-outline-secondary prompt-dismiss">Dismiss</button>' +
+                '</div>';
+            linkBox.appendChild(prompt);
+
+            prompt.querySelector('.prompt-dismiss').addEventListener('click', function() {
+                prompt.remove();
+            });
+
+            prompt.querySelector('.prompt-accept').addEventListener('click', function() {
+                prompt.remove();
+                applySpotifyResult(linkBox, data);
+            });
+
+        } catch (err) {
+            btn.innerHTML = origText;
+            btn.disabled = false;
+        }
+    }
+
+    function applySpotifyResult(linkBox, data) {
+        const contentDiv = linkBox.querySelector('.link-box-content');
+        const existingLink = contentDiv.querySelector('a');
+        const addLabel = contentDiv.querySelector('.add-link-label');
+
+        if (existingLink) {
+            existingLink.href = data.url;
+            existingLink.textContent = data.url;
+        } else if (addLabel) {
+            const a = document.createElement('a');
+            a.href = data.url;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            a.textContent = data.url;
+            addLabel.replaceWith(a);
+        }
+
+        const oldScore = linkBox.querySelector('.link-match-score');
+        if (oldScore) oldScore.remove();
+
+        if (data.match >= 1.0) {
+            linkBox.className = 'link-box link-match-exact mb-1';
+        } else if (data.match >= 0.7) {
+            linkBox.className = 'link-box link-match-partial mb-1';
+        } else {
+            linkBox.className = 'link-box link-match-poor mb-1';
+        }
+
+        if (data.match < 1.0) {
+            const score = document.createElement('div');
+            score.className = 'link-match-score';
+            score.textContent = 'Spotify ' + data.match.toFixed(2) + ' — ' + data.fetched_title;
+            linkBox.appendChild(score);
+        }
+
+        linkBox.dataset.service = 'Spotify';
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 
     // Update button state when playlist dropdown changes

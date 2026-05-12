@@ -42,6 +42,44 @@ def _fetch_beatport_title(url: str) -> str | None:
     return title_part
 
 
+def scrape_beatport_track_names(url: str) -> list[str]:
+    """Scrape track names from a Beatport release page."""
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; dnb-scraper/1.0)"},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return []
+    except requests.RequestException:
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    tracks = []
+    for span in soup.select("span.buk-track-primary-title"):
+        name = span.get_text(strip=True)
+        if name:
+            tracks.append(name)
+    if tracks:
+        return tracks
+
+    # Fallback: look for JSON-LD structured data
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            import json
+            ld = json.loads(script.string or "")
+            if isinstance(ld, dict) and "track" in ld:
+                for t in ld["track"]:
+                    name = t.get("name", "")
+                    if name:
+                        tracks.append(name)
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
+    return tracks
+
+
 def verify_beatport_link(release_title: str, beatport_url: str) -> tuple[float, str] | None:
     """Check a Beatport URL against a release title.
 

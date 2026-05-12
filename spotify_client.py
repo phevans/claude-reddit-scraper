@@ -70,6 +70,50 @@ def compute_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
+def search_spotify(query: str, search_type: str = "album", limit: int = 5) -> list[dict] | None:
+    """Search Spotify for albums or tracks.
+
+    Returns a list of results with keys: name, url, and (for tracks) album_name, album_url.
+    """
+    if search_type not in ("album", "track"):
+        return None
+
+    for attempt in range(2):
+        token = _get_access_token()
+        response = requests.get(
+            "https://api.spotify.com/v1/search",
+            params={"q": query, "type": search_type, "limit": limit},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if response.status_code == 401 and attempt == 0:
+            _token_cache.clear()
+            continue
+        if response.status_code != 200:
+            return None
+
+        data = response.json()
+        results = []
+        if search_type == "album":
+            for item in data.get("albums", {}).get("items", []):
+                results.append({
+                    "name": item.get("name", ""),
+                    "url": item.get("external_urls", {}).get("spotify", ""),
+                    "artists": ", ".join(a.get("name", "") for a in item.get("artists", [])),
+                })
+        else:
+            for item in data.get("tracks", {}).get("items", []):
+                album = item.get("album", {})
+                results.append({
+                    "name": item.get("name", ""),
+                    "url": item.get("external_urls", {}).get("spotify", ""),
+                    "artists": ", ".join(a.get("name", "") for a in item.get("artists", [])),
+                    "album_name": album.get("name", ""),
+                    "album_url": album.get("external_urls", {}).get("spotify", ""),
+                })
+        return results
+    return None
+
+
 def verify_spotify_link(release_title: str, spotify_url: str) -> tuple[float, str] | None:
     """Check a Spotify URL against a release title.
 
