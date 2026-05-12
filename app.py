@@ -29,6 +29,14 @@ def _verify_release(release):
         if result is not None:
             release.beatport_match, release.beatport_title = result
 
+    if not spotify_url:
+        found = _search_spotify_cascade(release.artists, release.title, beatport_url)
+        if found:
+            release.links["Spotify"] = found["url"]
+            release.spotify_match = found["match"]
+            release.spotify_title = found["fetched_title"]
+            release.spotify_auto = True
+
     return release
 
 
@@ -47,7 +55,7 @@ def scrape():
             sections = parse_releases(html)
 
             # Collect all unique services across all sections
-            all_services_set = set()
+            all_services_set = {"Spotify"}
             for section in sections:
                 for release in section.releases:
                     all_services_set.update(release.links.keys())
@@ -137,17 +145,9 @@ def _best_match(results, release_artist, release_title):
     return best
 
 
-@app.route("/spotify/search", methods=["POST"])
-def spotify_search():
-    data = request.get_json()
-    artist = data.get("artist", "")
-    title = data.get("title", "")
-    beatport_url = data.get("beatport_url", "")
-    if not title:
-        return jsonify({"error": "title is required"}), 400
-
+def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
+    """Run the cascading Spotify search. Returns a result dict or None."""
     query = f"{artist} {title}".strip()
-    threshold = 0.6
 
     # Step 1: album search by artist + title
     results = search_spotify(query, "album")
@@ -156,7 +156,7 @@ def spotify_search():
         if best and best["match"] >= threshold:
             best["source"] = "album_search"
             best["service"] = "Spotify"
-            return jsonify(best)
+            return best
 
     # Step 2: track search by artist + title
     results = search_spotify(query, "track")
@@ -168,7 +168,7 @@ def spotify_search():
                 best["fetched_title"] = best.get("album_name", best["fetched_title"])
             best["source"] = "track_search"
             best["service"] = "Spotify"
-            return jsonify(best)
+            return best
 
     # Step 3: if beatport URL provided, scrape first track name and retry
     if beatport_url:
@@ -176,16 +176,14 @@ def spotify_search():
         if track_names:
             track_query = f"{artist} {track_names[0]}".strip()
 
-            # Step 3a: album search by artist + first beatport track
             results = search_spotify(track_query, "album")
             if results:
                 best = _best_match(results, artist, title)
                 if best and best["match"] >= threshold:
                     best["source"] = "beatport_track_album_search"
                     best["service"] = "Spotify"
-                    return jsonify(best)
+                    return best
 
-            # Step 3b: track search by artist + first beatport track
             results = search_spotify(track_query, "track")
             if results:
                 best = _best_match(results, artist, title)
@@ -195,8 +193,23 @@ def spotify_search():
                         best["fetched_title"] = best.get("album_name", best["fetched_title"])
                     best["source"] = "beatport_track_search"
                     best["service"] = "Spotify"
-                    return jsonify(best)
+                    return best
 
+    return None
+
+
+@app.route("/spotify/search", methods=["POST"])
+def spotify_search():
+    data = request.get_json()
+    artist = data.get("artist", "")
+    title = data.get("title", "")
+    beatport_url = data.get("beatport_url", "")
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+
+    result = _search_spotify_cascade(artist, title, beatport_url)
+    if result:
+        return jsonify(result)
     return jsonify({"service": "Spotify", "match": None, "error": "No good match found on Spotify"})
 
 
