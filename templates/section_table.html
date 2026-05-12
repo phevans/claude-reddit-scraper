@@ -13,7 +13,7 @@
     </thead>
     <tbody>
         {% for release in section.releases %}
-        <tr>
+        <tr data-release-title="{{ release.title }}">
             <td class="text-center">
                 {% if "Beatport" in release.links %}
                 <input type="checkbox" class="form-check-input release-checkbox" data-beatport-url="{{ release.links['Beatport'] }}">
@@ -22,7 +22,7 @@
             <td>{{ release.artists }}</td>
             <td>{{ release.title }}</td>
             <td>{{ release.label }}</td>
-            <td>
+            <td class="links-cell">
                 {% for service in all_services %}
                 {% if service in release.links %}
                     {% if service == "Spotify" %}
@@ -38,27 +38,48 @@
 
                     {% if match is not none %}
                         {% if match == 1.0 %}
-                        <div class="link-box link-match-exact mb-1">
-                            <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                        <div class="link-box link-match-exact mb-1" data-service="{{ service }}">
+                            <div class="link-box-content">
+                                <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                                <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>
+                            </div>
                         </div>
                         {% elif match >= 0.7 %}
-                        <div class="link-box link-match-partial mb-1" title="{{ fetched_title }}">
-                            <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                        <div class="link-box link-match-partial mb-1" data-service="{{ service }}">
+                            <div class="link-box-content">
+                                <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                                <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>
+                            </div>
                             <div class="link-match-score">{{ service }} {{ "%.2f"|format(match) }} — {{ fetched_title }}</div>
                         </div>
                         {% else %}
-                        <div class="link-box link-match-poor mb-1" title="{{ fetched_title }}">
-                            <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                        <div class="link-box link-match-poor mb-1" data-service="{{ service }}">
+                            <div class="link-box-content">
+                                <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                                <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>
+                            </div>
                             <div class="link-match-score">{{ service }} {{ "%.2f"|format(match) }} — {{ fetched_title }}</div>
                         </div>
                         {% endif %}
                     {% else %}
-                    <div class="link-box link-unchecked mb-1">
-                        <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                    <div class="link-box link-unchecked mb-1" data-service="{{ service }}">
+                        <div class="link-box-content">
+                            <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>
+                            <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>
+                        </div>
                     </div>
                     {% endif %}
                 {% endif %}
                 {% endfor %}
+
+                {% if "Spotify" not in release.links %}
+                <div class="link-box link-add-new mb-1" data-service="Spotify">
+                    <div class="link-box-content">
+                        <span class="add-link-label">+ Add Spotify link</span>
+                        <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Add Spotify link">&#9998;</button>
+                    </div>
+                </div>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}

@@ -88,7 +88,7 @@ class TestScrape:
         mock_get_post.return_value = sample_post_html
         events = self._collect_events(client.get("/scrape"))
         section_html = " ".join(data for evt, data in events if evt == "section")
-        assert "btn-success" in section_html
+        assert "link-match-exact" in section_html
 
     @patch("app.verify_beatport_link", return_value=(0.8, "Wrong Beatport Title"))
     @patch("app.verify_spotify_link", return_value=(0.8, "Wrong Spotify Title"))
@@ -97,7 +97,7 @@ class TestScrape:
         mock_get_post.return_value = sample_post_html
         events = self._collect_events(client.get("/scrape"))
         section_html = " ".join(data for evt, data in events if evt == "section")
-        assert "btn-warning" in section_html
+        assert "link-match-partial" in section_html
         assert "0.80" in section_html
         assert "Wrong Spotify Title" in section_html
         assert "Wrong Beatport Title" in section_html
@@ -109,7 +109,7 @@ class TestScrape:
         mock_get_post.return_value = sample_post_html
         events = self._collect_events(client.get("/scrape"))
         section_html = " ".join(data for evt, data in events if evt == "section")
-        assert "btn-danger" in section_html
+        assert "link-match-poor" in section_html
         assert "0.30" in section_html
         assert "Completely Different" in section_html
         assert "Totally Wrong" in section_html

@@ -44,6 +44,61 @@
             opacity: 0.8;
             margin-top: 2px;
         }
+        .link-box-content {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .link-box-content a,
+        .link-box-content .add-link-label {
+            flex: 1;
+            min-width: 0;
+        }
+        .add-link-label {
+            opacity: 0.6;
+            font-style: italic;
+            cursor: pointer;
+        }
+        .link-edit-btn {
+            flex-shrink: 0;
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 0 2px;
+            font-size: 0.85rem;
+            opacity: 0.4;
+            line-height: 1;
+        }
+        .link-box:hover .link-edit-btn {
+            opacity: 0.8;
+        }
+        .link-edit-form {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .link-edit-form input {
+            flex: 1;
+            font-size: 0.8rem;
+            padding: 2px 6px;
+            border: 1px solid #ced4da;
+            border-radius: 3px;
+        }
+        .link-edit-form button {
+            flex-shrink: 0;
+            font-size: 0.75rem;
+            padding: 2px 8px;
+        }
+        .link-add-new {
+            background-color: transparent;
+            border: 1px dashed #adb5bd;
+            color: #6c757d;
+        }
+        .link-verifying {
+            background-color: #e9ecef;
+            border: 1px solid #ced4da;
+            color: #495057;
+        }
     </style>
 </head>
 <body>
@@ -275,6 +330,119 @@
 
         btn.disabled = false;
         updateAddButton();
+    }
+
+    function toggleEditLink(btn) {
+        const linkBox = btn.closest('.link-box');
+        const contentDiv = linkBox.querySelector('.link-box-content');
+        const scoreDiv = linkBox.querySelector('.link-match-score');
+        const existingLink = contentDiv.querySelector('a');
+        const currentUrl = existingLink ? existingLink.href : '';
+
+        const form = document.createElement('div');
+        form.className = 'link-edit-form';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentUrl;
+        input.placeholder = 'Paste URL...';
+        const saveBtn = document.createElement('button');
+        saveBtn.className = 'btn btn-sm btn-primary';
+        saveBtn.textContent = 'Check';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn btn-sm btn-outline-secondary';
+        cancelBtn.textContent = '✕';
+        form.appendChild(input);
+        form.appendChild(saveBtn);
+        form.appendChild(cancelBtn);
+
+        contentDiv.style.display = 'none';
+        if (scoreDiv) scoreDiv.style.display = 'none';
+        linkBox.insertBefore(form, contentDiv.nextSibling);
+        input.focus();
+        input.select();
+
+        cancelBtn.addEventListener('click', function() {
+            form.remove();
+            contentDiv.style.display = '';
+            if (scoreDiv) scoreDiv.style.display = '';
+        });
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') cancelBtn.click();
+            if (e.key === 'Enter') saveBtn.click();
+        });
+
+        saveBtn.addEventListener('click', async function() {
+            const newUrl = input.value.trim();
+            if (!newUrl) return;
+
+            const row = linkBox.closest('tr');
+            const releaseTitle = row.dataset.releaseTitle;
+
+            saveBtn.disabled = true;
+            saveBtn.textContent = '...';
+            linkBox.className = 'link-box link-verifying mb-1';
+
+            try {
+                const resp = await fetch('/verify-link', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({url: newUrl, release_title: releaseTitle})
+                });
+                const data = await resp.json();
+
+                form.remove();
+                contentDiv.style.display = '';
+
+                if (existingLink) {
+                    existingLink.href = newUrl;
+                    existingLink.textContent = newUrl;
+                } else {
+                    const addLabel = contentDiv.querySelector('.add-link-label');
+                    if (addLabel) {
+                        const a = document.createElement('a');
+                        a.href = newUrl;
+                        a.target = '_blank';
+                        a.rel = 'noopener';
+                        a.textContent = newUrl;
+                        addLabel.replaceWith(a);
+                    }
+                }
+
+                let oldScore = linkBox.querySelector('.link-match-score');
+                if (oldScore) oldScore.remove();
+
+                if (data.match !== null && data.match !== undefined) {
+                    if (data.match === 1.0) {
+                        linkBox.className = 'link-box link-match-exact mb-1';
+                    } else if (data.match >= 0.7) {
+                        linkBox.className = 'link-box link-match-partial mb-1';
+                    } else {
+                        linkBox.className = 'link-box link-match-poor mb-1';
+                    }
+                    if (data.match < 1.0) {
+                        const newScore = document.createElement('div');
+                        newScore.className = 'link-match-score';
+                        newScore.textContent = data.service + ' ' + data.match.toFixed(2) + ' — ' + data.fetched_title;
+                        linkBox.appendChild(newScore);
+                    }
+                } else if (data.error) {
+                    linkBox.className = 'link-box link-match-poor mb-1';
+                    const errDiv = document.createElement('div');
+                    errDiv.className = 'link-match-score';
+                    errDiv.textContent = data.error;
+                    linkBox.appendChild(errDiv);
+                } else {
+                    linkBox.className = 'link-box link-unchecked mb-1';
+                }
+
+                linkBox.dataset.service = data.service || 'Unknown';
+            } catch (err) {
+                form.remove();
+                contentDiv.style.display = '';
+                linkBox.className = 'link-box link-match-poor mb-1';
+            }
+        });
     }
 
     // Update button state when playlist dropdown changes

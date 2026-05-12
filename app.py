@@ -98,6 +98,30 @@ def _sse(event: str, data) -> str:
     return f"event: {event}\n{payload}\n\n"
 
 
+@app.route("/verify-link", methods=["POST"])
+def verify_link():
+    data = request.get_json()
+    url = data.get("url", "")
+    release_title = data.get("release_title", "")
+    if not url or not release_title:
+        return jsonify({"error": "url and release_title are required"}), 400
+
+    if "spotify.com" in url:
+        result = verify_spotify_link(release_title, url)
+        service = "Spotify"
+    elif "beatport.com" in url:
+        result = verify_beatport_link(release_title, url)
+        service = "Beatport"
+    else:
+        return jsonify({"service": "Unknown", "match": None, "fetched_title": None})
+
+    if result is None:
+        return jsonify({"service": service, "match": None, "fetched_title": None, "error": "Could not fetch title from URL"})
+
+    match, fetched_title = result
+    return jsonify({"service": service, "match": round(match, 4), "fetched_title": fetched_title})
+
+
 @app.route("/beatport/playlists")
 def beatport_playlists():
     try:
