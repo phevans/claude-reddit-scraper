@@ -122,11 +122,13 @@ def verify_link():
     return jsonify({"service": service, "match": round(match, 4), "fetched_title": fetched_title})
 
 
-def _best_match(results, release_title):
-    """Find the best matching result from a Spotify search, comparing against release_title."""
+def _best_match(results, release_artist, release_title):
+    """Find the best matching result from a Spotify search, comparing artist+title."""
+    release_combined = f"{release_artist} - {release_title}".strip(" -")
     best = None
     for r in results:
-        score = compute_similarity(release_title, r["name"])
+        result_combined = f"{r.get('artists', '')} - {r['name']}".strip(" -")
+        score = compute_similarity(release_combined, result_combined)
         if best is None or score > best["match"]:
             best = {"match": round(score, 4), "fetched_title": r["name"], "url": r.get("url", ""), "artists": r.get("artists", "")}
             if "album_url" in r:
@@ -150,7 +152,7 @@ def spotify_search():
     # Step 1: album search by artist + title
     results = search_spotify(query, "album")
     if results:
-        best = _best_match(results, title)
+        best = _best_match(results, artist, title)
         if best and best["match"] >= threshold:
             best["source"] = "album_search"
             best["service"] = "Spotify"
@@ -159,7 +161,7 @@ def spotify_search():
     # Step 2: track search by artist + title
     results = search_spotify(query, "track")
     if results:
-        best = _best_match(results, title)
+        best = _best_match(results, artist, title)
         if best and best["match"] >= threshold:
             if best.get("album_url"):
                 best["url"] = best["album_url"]
@@ -177,7 +179,7 @@ def spotify_search():
             # Step 3a: album search by artist + first beatport track
             results = search_spotify(track_query, "album")
             if results:
-                best = _best_match(results, title)
+                best = _best_match(results, artist, title)
                 if best and best["match"] >= threshold:
                     best["source"] = "beatport_track_album_search"
                     best["service"] = "Spotify"
@@ -186,7 +188,7 @@ def spotify_search():
             # Step 3b: track search by artist + first beatport track
             results = search_spotify(track_query, "track")
             if results:
-                best = _best_match(results, title)
+                best = _best_match(results, artist, title)
                 if best and best["match"] >= threshold:
                     if best.get("album_url"):
                         best["url"] = best["album_url"]
