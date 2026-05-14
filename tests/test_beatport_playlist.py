@@ -168,7 +168,7 @@ class TestAppPlaylistRoutes:
         assert resp.status_code == 200
         assert resp.get_json() == {"track_ids": [111, 222]}
 
-    @patch("app.add_tracks_to_playlist", return_value={"status": "ok"})
+    @patch("app.beatport_add_tracks_to_playlist", return_value={"status": "ok"})
     def test_add_tracks(self, mock_add, client):
         resp = client.post(
             "/beatport/add-tracks",

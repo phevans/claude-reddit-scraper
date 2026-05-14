@@ -1,13 +1,26 @@
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
 
 from beatport_client import scrape_beatport_track_names, verify_beatport_link
-from beatport_playlist import add_tracks_to_playlist, get_my_playlists, get_track_ids
+from beatport_playlist import (
+    add_tracks_to_playlist as beatport_add_tracks_to_playlist,
+    create_playlist as beatport_create_playlist,
+    get_my_playlists,
+    get_track_ids,
+)
 from parser import parse_releases
 from reddit_client import get_latest_nmm_post
 from spotify_client import compute_similarity, search_spotify, verify_spotify_link
+from spotify_playlist import (
+    add_tracks_to_playlist as spotify_add_tracks_to_playlist,
+    create_playlist as spotify_create_playlist,
+    exchange_code as spotify_exchange_code,
+    get_authorize_url as spotify_get_authorize_url,
+    is_authenticated as spotify_is_authenticated,
+    resolve_track_uris as spotify_resolve_track_uris,
+)
 
 app = Flask(__name__)
 
@@ -260,10 +273,91 @@ def beatport_add_tracks():
     if not playlist_id or not track_ids:
         return jsonify({"error": "playlist_id and track_ids are required"}), 400
     try:
-        result = add_tracks_to_playlist(int(playlist_id), track_ids)
+        result = beatport_add_tracks_to_playlist(int(playlist_id), track_ids)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/spotify/auth-status")
+def spotify_auth_status():
+    return jsonify({"authenticated": spotify_is_authenticated()})
+
+
+@app.route("/spotify/login")
+def spotify_login():
+    redirect_uri = request.url_root.rstrip("/") + "/spotify/callback"
+    url = spotify_get_authorize_url(redirect_uri)
+    return redirect(url)
+
+
+@app.route("/spotify/callback")
+def spotify_callback():
+    code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        return f"Spotify authorization failed: {error}", 400
+    if not code:
+        return "Missing authorization code", 400
+    redirect_uri = request.url_root.rstrip("/") + "/spotify/callback"
+    spotify_exchange_code(code, redirect_uri)
+    return redirect("/")
+
+
+@app.route("/create-playlists", methods=["POST"])
+def create_playlists():
+    """Create playlists on Beatport and Spotify, add all tracks from the scrape."""
+    data = request.get_json()
+    playlist_name = data.get("name", "NMM Playlist")
+    releases = data.get("releases", [])
+
+    results = {"beatport": None, "spotify": None}
+
+    # Beatport
+    try:
+        bp_playlist = beatport_create_playlist(playlist_name)
+        bp_track_ids = []
+        for rel in releases:
+            beatport_url = rel.get("beatport_url", "")
+            if beatport_url:
+                ids = get_track_ids(beatport_url)
+                bp_track_ids.extend(ids)
+        if bp_track_ids:
+            beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
+        results["beatport"] = {
+            "success": True,
+            "playlist_id": bp_playlist["id"],
+            "playlist_name": bp_playlist["name"],
+            "tracks_added": len(bp_track_ids),
+        }
+    except Exception as e:
+        results["beatport"] = {"success": False, "error": str(e)}
+
+    # Spotify
+    try:
+        if not spotify_is_authenticated():
+            results["spotify"] = {"success": False, "error": "Not authenticated — click 'Connect Spotify' first"}
+        else:
+            sp_playlist = spotify_create_playlist(playlist_name)
+            sp_uris = []
+            for rel in releases:
+                spotify_url = rel.get("spotify_url", "")
+                if spotify_url:
+                    uris = spotify_resolve_track_uris(spotify_url)
+                    sp_uris.extend(uris)
+            if sp_uris:
+                spotify_add_tracks_to_playlist(sp_playlist["id"], sp_uris)
+            results["spotify"] = {
+                "success": True,
+                "playlist_id": sp_playlist["id"],
+                "playlist_name": sp_playlist["name"],
+                "playlist_url": sp_playlist.get("url", ""),
+                "tracks_added": len(sp_uris),
+            }
+    except Exception as e:
+        results["spotify"] = {"success": False, "error": str(e)}
+
+    return jsonify(results)
 
 
 if __name__ == "__main__":

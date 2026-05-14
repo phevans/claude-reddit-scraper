@@ -189,6 +189,29 @@
             </div>
         </div>
 
+        <div id="create-playlists-panel" class="mb-4" style="display: none;">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Create Playlists</h5>
+                    <div class="row align-items-end g-3">
+                        <div class="col-auto">
+                            <label for="new-playlist-name" class="form-label">Playlist name</label>
+                            <input type="text" id="new-playlist-name" class="form-control" value="NMM Playlist">
+                        </div>
+                        <div class="col-auto">
+                            <span id="spotify-auth-status" class="badge bg-secondary">Checking Spotify...</span>
+                        </div>
+                        <div class="col-auto">
+                            <button id="create-playlists-btn" class="btn btn-success" onclick="createPlaylists()">
+                                Create Playlists
+                            </button>
+                        </div>
+                    </div>
+                    <div id="create-playlists-status" class="mt-2"></div>
+                </div>
+            </div>
+        </div>
+
         <div id="results"></div>
     </div>
 
@@ -237,6 +260,7 @@
             progressBar.textContent = 'Done';
             statusText.textContent = 'Complete!';
             showPlaylistControls();
+            showCreatePlaylistsPanel();
         });
 
         source.addEventListener('error', function(e) {
@@ -606,6 +630,104 @@
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    }
+
+    function showCreatePlaylistsPanel() {
+        document.getElementById('create-playlists-panel').style.display = 'block';
+        checkSpotifyAuth();
+    }
+
+    function checkSpotifyAuth() {
+        const badge = document.getElementById('spotify-auth-status');
+        fetch('/spotify/auth-status')
+            .then(r => r.json())
+            .then(data => {
+                if (data.authenticated) {
+                    badge.className = 'badge bg-success';
+                    badge.textContent = 'Spotify connected';
+                } else {
+                    badge.className = 'badge bg-warning text-dark';
+                    badge.innerHTML = '<a href="/spotify/login" class="text-dark">Connect Spotify</a>';
+                }
+            })
+            .catch(() => {
+                badge.className = 'badge bg-danger';
+                badge.textContent = 'Spotify check failed';
+            });
+    }
+
+    function collectReleases() {
+        const rows = document.querySelectorAll('tr[data-release-title]');
+        const releases = [];
+        rows.forEach(row => {
+            releases.push({
+                artists: row.dataset.releaseArtists || '',
+                title: row.dataset.releaseTitle || '',
+                beatport_url: row.dataset.beatportUrl || '',
+                spotify_url: row.dataset.spotifyUrl || '',
+            });
+        });
+        return releases;
+    }
+
+    async function createPlaylists() {
+        const btn = document.getElementById('create-playlists-btn');
+        const status = document.getElementById('create-playlists-status');
+        const name = document.getElementById('new-playlist-name').value.trim() || 'NMM Playlist';
+        const releases = collectReleases();
+
+        if (releases.length === 0) {
+            status.innerHTML = '<div class="alert alert-warning">No releases found. Run the scrape first.</div>';
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Creating...';
+        status.innerHTML = '<div class="text-muted">Creating playlists and adding tracks...</div>';
+
+        try {
+            const resp = await fetch('/create-playlists', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name, releases: releases})
+            });
+            const data = await resp.json();
+
+            let html = '';
+
+            if (data.beatport) {
+                if (data.beatport.success) {
+                    html += '<div class="alert alert-success mb-2">Beatport: Created "' +
+                        escapeHtml(data.beatport.playlist_name) + '" with ' +
+                        data.beatport.tracks_added + ' tracks</div>';
+                } else {
+                    html += '<div class="alert alert-danger mb-2">Beatport: ' +
+                        escapeHtml(data.beatport.error) + '</div>';
+                }
+            }
+
+            if (data.spotify) {
+                if (data.spotify.success) {
+                    let spotifyMsg = 'Spotify: Created "' + escapeHtml(data.spotify.playlist_name) +
+                        '" with ' + data.spotify.tracks_added + ' tracks';
+                    if (data.spotify.playlist_url) {
+                        spotifyMsg += ' — <a href="' + escapeHtml(data.spotify.playlist_url) +
+                            '" target="_blank" rel="noopener">Open in Spotify</a>';
+                    }
+                    html += '<div class="alert alert-success mb-2">' + spotifyMsg + '</div>';
+                } else {
+                    html += '<div class="alert alert-danger mb-2">Spotify: ' +
+                        escapeHtml(data.spotify.error) + '</div>';
+                }
+            }
+
+            status.innerHTML = html;
+        } catch (err) {
+            status.innerHTML = '<div class="alert alert-danger">Error: ' + err + '</div>';
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Create Playlists';
     }
 
     // Update button state when playlist dropdown changes

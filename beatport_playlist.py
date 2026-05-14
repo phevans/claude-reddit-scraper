@@ -193,6 +193,13 @@ def get_track_ids(beatport_url: str) -> list[int]:
     return [t["id"] for t in tracks if "id" in t]
 
 
+def create_playlist(name: str) -> dict:
+    """Create a new Beatport playlist. Returns {id, name}."""
+    resp = _api_request("POST", "/v4/my/playlists/", json={"name": name})
+    data = resp.json()
+    return {"id": data["id"], "name": data.get("name", name)}
+
+
 def get_my_playlists() -> list[dict]:
     """Get the authenticated user's playlists."""
     resp = _api_request("GET", "/v4/my/playlists/")

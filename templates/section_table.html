@@ -13,7 +13,7 @@
     </thead>
     <tbody>
         {% for release in section.releases %}
-        <tr data-release-title="{{ release.title }}" data-release-artists="{{ release.artists }}" data-beatport-url="{{ release.links.get('Beatport', '') }}">
+        <tr data-release-title="{{ release.title }}" data-release-artists="{{ release.artists }}" data-beatport-url="{{ release.links.get('Beatport', '') }}" data-spotify-url="{{ release.links.get('Spotify', '') }}">
             <td class="text-center">
                 {% if "Beatport" in release.links %}
                 <input type="checkbox" class="form-check-input release-checkbox" data-beatport-url="{{ release.links['Beatport'] }}">
