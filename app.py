@@ -282,6 +282,15 @@ def beatport_add_tracks():
         return jsonify({"error": str(e)}), 500
 
 
+def _get_callback_uri():
+    """Build the Spotify callback URI, respecting CloudFront/proxy HTTPS."""
+    proto = request.headers.get("CloudFront-Forwarded-Proto",
+                                request.headers.get("X-Forwarded-Proto",
+                                                    request.scheme))
+    host = request.headers.get("Host", request.host)
+    return f"{proto}://{host}/spotify/callback"
+
+
 @app.route("/spotify/auth-status")
 def spotify_auth_status():
     return jsonify({"authenticated": spotify_is_authenticated()})
@@ -289,7 +298,7 @@ def spotify_auth_status():
 
 @app.route("/spotify/login")
 def spotify_login():
-    redirect_uri = request.url_root.rstrip("/") + "/spotify/callback"
+    redirect_uri = _get_callback_uri()
     url = spotify_get_authorize_url(redirect_uri)
     return redirect(url)
 
@@ -302,7 +311,7 @@ def spotify_callback():
         return f"Spotify authorization failed: {error}", 400
     if not code:
         return "Missing authorization code", 400
-    redirect_uri = request.url_root.rstrip("/") + "/spotify/callback"
+    redirect_uri = _get_callback_uri()
     spotify_exchange_code(code, redirect_uri)
     return redirect("/")
 
