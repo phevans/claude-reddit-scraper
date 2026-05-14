@@ -5,6 +5,7 @@ import os
 import re
 import time
 from typing import Optional
+from urllib.parse import quote as _url_quote
 
 import requests
 from dotenv import load_dotenv
@@ -50,7 +51,7 @@ def get_authorize_url() -> str:
         "client_id": _CLIENT_ID,
         "redirect_uri": _REDIRECT_URI,
     }
-    qs = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
+    qs = "&".join(f"{k}={_url_quote(str(v), safe='')}" for k, v in params.items())
     return f"{_BASE_URL}/v4/auth/o/authorize/?{qs}"
 
 
