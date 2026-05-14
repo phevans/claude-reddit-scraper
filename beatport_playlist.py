@@ -13,7 +13,7 @@ load_dotenv()
 
 _BASE_URL = "https://api.beatport.com"
 _CLIENT_ID = "eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1"
-_REDIRECT_URI = "https://api.beatport.com/auth/o/post-message/"
+_REDIRECT_URI = "https://api.beatport.com/v4/auth/o/post-message/"
 _TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 

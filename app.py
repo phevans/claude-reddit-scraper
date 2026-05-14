@@ -302,11 +302,12 @@ def auth_status():
     })
 
 
-@app.route("/spotify/login")
-def spotify_login():
+@app.route("/spotify/authorize-url")
+def spotify_authorize_url():
+    """Return the Spotify OAuth authorize URL for the popup flow."""
     redirect_uri = _get_callback_uri("/spotify/callback")
     url = spotify_get_authorize_url(redirect_uri)
-    return redirect(url)
+    return jsonify({"url": url})
 
 
 @app.route("/spotify/callback")
@@ -314,12 +315,18 @@ def spotify_callback():
     code = request.args.get("code")
     error = request.args.get("error")
     if error:
-        return f"Spotify authorization failed: {error}", 400
+        return f"<html><body><p>Spotify authorization failed: {error}</p></body></html>", 400
     if not code:
-        return "Missing authorization code", 400
+        return "<html><body><p>Missing authorization code</p></body></html>", 400
     redirect_uri = _get_callback_uri("/spotify/callback")
     spotify_exchange_code(code, redirect_uri)
-    return redirect("/")
+    # Close the popup and notify the opener
+    return """<html><body><script>
+        if (window.opener) {
+            window.opener.postMessage({service: 'spotify', success: true}, '*');
+        }
+        window.close();
+    </script><p>Spotify connected! You can close this window.</p></body></html>"""
 
 
 @app.route("/beatport/authorize-url")

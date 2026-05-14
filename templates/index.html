@@ -649,7 +649,7 @@
                     spBadge.textContent = 'Spotify connected';
                 } else {
                     spBadge.className = 'badge bg-warning text-dark';
-                    spBadge.innerHTML = '<a href="/spotify/login" class="text-dark">Connect Spotify</a>';
+                    spBadge.innerHTML = '<a href="#" onclick="connectSpotify(); return false;" class="text-dark">Connect Spotify</a>';
                 }
                 if (data.beatport) {
                     bpBadge.className = 'badge bg-success';
@@ -665,6 +665,22 @@
                 bpBadge.className = 'badge bg-danger';
                 bpBadge.textContent = 'Check failed';
             });
+    }
+
+    // Listen for Spotify OAuth callback postMessage
+    window.addEventListener('message', function(event) {
+        if (event.data && event.data.service === 'spotify' && event.data.success) {
+            checkAuthStatus();
+        }
+    });
+
+    function connectSpotify() {
+        fetch('/spotify/authorize-url')
+            .then(r => r.json())
+            .then(data => {
+                window.open(data.url, 'spotify_auth', 'width=600,height=700');
+            })
+            .catch(err => alert('Failed to get Spotify authorize URL: ' + err));
     }
 
     function connectBeatport() {
