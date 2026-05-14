@@ -322,24 +322,25 @@ def spotify_callback():
     return redirect("/")
 
 
-@app.route("/beatport/login")
-def beatport_login():
-    redirect_uri = _get_callback_uri("/beatport/callback")
-    url = beatport_get_authorize_url(redirect_uri)
-    return redirect(url)
+@app.route("/beatport/authorize-url")
+def beatport_authorize_url():
+    """Return the Beatport OAuth authorize URL for the popup flow."""
+    url = beatport_get_authorize_url()
+    return jsonify({"url": url})
 
 
-@app.route("/beatport/callback")
-def beatport_callback():
-    code = request.args.get("code")
-    error = request.args.get("error")
-    if error:
-        return f"Beatport authorization failed: {error}", 400
+@app.route("/beatport/exchange", methods=["POST"])
+def beatport_exchange():
+    """Exchange a Beatport auth code (from postMessage popup) for tokens."""
+    data = request.get_json()
+    code = data.get("code")
     if not code:
-        return "Missing authorization code", 400
-    redirect_uri = _get_callback_uri("/beatport/callback")
-    beatport_exchange_code(code, redirect_uri)
-    return redirect("/")
+        return jsonify({"error": "Missing authorization code"}), 400
+    try:
+        beatport_exchange_code(code)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/create-playlists", methods=["POST"])

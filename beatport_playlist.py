@@ -43,25 +43,25 @@ def _token_is_valid(token_data: dict) -> bool:
     return time.time() < (expires_at - _TOKEN_EXPIRY_BUFFER)
 
 
-def get_authorize_url(redirect_uri: str) -> str:
+def get_authorize_url() -> str:
     """Build the Beatport authorization URL for the user to visit."""
     params = {
         "response_type": "code",
         "client_id": _CLIENT_ID,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": _REDIRECT_URI,
     }
     qs = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
     return f"{_BASE_URL}/v4/auth/o/authorize/?{qs}"
 
 
-def exchange_code(code: str, redirect_uri: str) -> dict:
+def exchange_code(code: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
     token_resp = requests.post(
         f"{_BASE_URL}/v4/auth/o/token/",
         data={
             "code": code,
             "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
+            "redirect_uri": _REDIRECT_URI,
             "client_id": _CLIENT_ID,
         },
     )

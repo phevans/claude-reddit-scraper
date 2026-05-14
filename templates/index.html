@@ -656,7 +656,7 @@
                     bpBadge.textContent = 'Beatport connected';
                 } else {
                     bpBadge.className = 'badge bg-warning text-dark';
-                    bpBadge.innerHTML = '<a href="/beatport/login" class="text-dark">Connect Beatport</a>';
+                    bpBadge.innerHTML = '<a href="#" onclick="connectBeatport(); return false;" class="text-dark">Connect Beatport</a>';
                 }
             })
             .catch(() => {
@@ -665,6 +665,45 @@
                 bpBadge.className = 'badge bg-danger';
                 bpBadge.textContent = 'Check failed';
             });
+    }
+
+    function connectBeatport() {
+        // Get the authorize URL from our backend
+        fetch('/beatport/authorize-url')
+            .then(r => r.json())
+            .then(data => {
+                const popup = window.open(data.url, 'beatport_auth', 'width=600,height=700');
+                // Listen for the postMessage from Beatport's redirect page
+                window.addEventListener('message', function handler(event) {
+                    // Accept messages from Beatport's domain
+                    if (event.origin !== 'https://api.beatport.com') return;
+                    window.removeEventListener('message', handler);
+                    if (popup) popup.close();
+
+                    const code = event.data && (event.data.code || event.data);
+                    if (!code) {
+                        alert('Beatport authorization failed: no code received');
+                        return;
+                    }
+
+                    // Exchange the code via our backend
+                    fetch('/beatport/exchange', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({code: typeof code === 'string' ? code : String(code)})
+                    })
+                    .then(r => r.json())
+                    .then(result => {
+                        if (result.success) {
+                            checkAuthStatus();
+                        } else {
+                            alert('Beatport token exchange failed: ' + (result.error || 'Unknown error'));
+                        }
+                    })
+                    .catch(err => alert('Beatport exchange error: ' + err));
+                });
+            })
+            .catch(err => alert('Failed to get Beatport authorize URL: ' + err));
     }
 
     function collectSections() {
