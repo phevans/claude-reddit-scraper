@@ -22,7 +22,10 @@ from spotify_playlist import (
     resolve_track_uris as spotify_resolve_track_uris,
 )
 
+from werkzeug.middleware.proxy_fix import ProxyFix
+
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 MAX_WORKERS = 10
 PREFERRED_SERVICE_ORDER = ["Beatport", "Bandcamp", "Spotify"]
