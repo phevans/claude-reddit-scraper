@@ -318,56 +318,65 @@ def spotify_callback():
 
 @app.route("/create-playlists", methods=["POST"])
 def create_playlists():
-    """Create playlists on Beatport and Spotify, add all tracks from the scrape."""
+    """Create per-subgenre playlists on Beatport and Spotify."""
     data = request.get_json()
-    playlist_name = data.get("name", "NMM Playlist")
-    releases = data.get("releases", [])
+    prefix = data.get("prefix", "NMM")
+    sections = data.get("sections", [])
 
-    results = {"beatport": None, "spotify": None}
+    results = []
 
-    # Beatport
-    try:
-        bp_playlist = beatport_create_playlist(playlist_name)
-        bp_track_ids = []
-        for rel in releases:
-            beatport_url = rel.get("beatport_url", "")
-            if beatport_url:
-                ids = get_track_ids(beatport_url)
-                bp_track_ids.extend(ids)
-        if bp_track_ids:
-            beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
-        results["beatport"] = {
-            "success": True,
-            "playlist_id": bp_playlist["id"],
-            "playlist_name": bp_playlist["name"],
-            "tracks_added": len(bp_track_ids),
-        }
-    except Exception as e:
-        results["beatport"] = {"success": False, "error": str(e)}
+    for section in sections:
+        section_name = section.get("name", "Unknown")
+        playlist_name = f"{prefix} {section_name}"
+        releases = section.get("releases", [])
+        section_result = {"section": section_name, "playlist_name": playlist_name,
+                          "beatport": None, "spotify": None}
 
-    # Spotify
-    try:
-        if not spotify_is_authenticated():
-            results["spotify"] = {"success": False, "error": "Not authenticated — click 'Connect Spotify' first"}
-        else:
-            sp_playlist = spotify_create_playlist(playlist_name)
-            sp_uris = []
+        # Beatport
+        try:
+            bp_track_ids = []
             for rel in releases:
-                spotify_url = rel.get("spotify_url", "")
-                if spotify_url:
-                    uris = spotify_resolve_track_uris(spotify_url)
-                    sp_uris.extend(uris)
-            if sp_uris:
-                spotify_add_tracks_to_playlist(sp_playlist["id"], sp_uris)
-            results["spotify"] = {
-                "success": True,
-                "playlist_id": sp_playlist["id"],
-                "playlist_name": sp_playlist["name"],
-                "playlist_url": sp_playlist.get("url", ""),
-                "tracks_added": len(sp_uris),
-            }
-    except Exception as e:
-        results["spotify"] = {"success": False, "error": str(e)}
+                beatport_url = rel.get("beatport_url", "")
+                if beatport_url:
+                    ids = get_track_ids(beatport_url)
+                    bp_track_ids.extend(ids)
+            if bp_track_ids:
+                bp_playlist = beatport_create_playlist(playlist_name)
+                beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
+                section_result["beatport"] = {
+                    "success": True,
+                    "tracks_added": len(bp_track_ids),
+                }
+            else:
+                section_result["beatport"] = {"success": True, "tracks_added": 0}
+        except Exception as e:
+            section_result["beatport"] = {"success": False, "error": str(e)}
+
+        # Spotify
+        try:
+            if not spotify_is_authenticated():
+                section_result["spotify"] = {"success": False, "error": "Not authenticated"}
+            else:
+                sp_uris = []
+                for rel in releases:
+                    spotify_url = rel.get("spotify_url", "")
+                    if spotify_url:
+                        uris = spotify_resolve_track_uris(spotify_url)
+                        sp_uris.extend(uris)
+                if sp_uris:
+                    sp_playlist = spotify_create_playlist(playlist_name)
+                    spotify_add_tracks_to_playlist(sp_playlist["id"], sp_uris)
+                    section_result["spotify"] = {
+                        "success": True,
+                        "tracks_added": len(sp_uris),
+                        "playlist_url": sp_playlist.get("url", ""),
+                    }
+                else:
+                    section_result["spotify"] = {"success": True, "tracks_added": 0}
+        except Exception as e:
+            section_result["spotify"] = {"success": False, "error": str(e)}
+
+        results.append(section_result)
 
     return jsonify(results)
 

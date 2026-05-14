@@ -195,8 +195,8 @@
                     <h5 class="card-title">Create Playlists</h5>
                     <div class="row align-items-end g-3">
                         <div class="col-auto">
-                            <label for="new-playlist-name" class="form-label">Playlist name</label>
-                            <input type="text" id="new-playlist-name" class="form-control" value="NMM Playlist">
+                            <label for="new-playlist-name" class="form-label">Playlist prefix</label>
+                            <input type="text" id="new-playlist-name" class="form-control" value="NMM">
                         </div>
                         <div class="col-auto">
                             <span id="spotify-auth-status" class="badge bg-secondary">Checking Spotify...</span>
@@ -656,71 +656,82 @@
             });
     }
 
-    function collectReleases() {
-        const rows = document.querySelectorAll('tr[data-release-title]');
-        const releases = [];
-        rows.forEach(row => {
-            releases.push({
-                artists: row.dataset.releaseArtists || '',
-                title: row.dataset.releaseTitle || '',
-                beatport_url: row.dataset.beatportUrl || '',
-                spotify_url: row.dataset.spotifyUrl || '',
+    function collectSections() {
+        const sections = [];
+        document.querySelectorAll('#results h2').forEach(h2 => {
+            const sectionName = h2.textContent.trim();
+            const table = h2.nextElementSibling;
+            if (!table || table.tagName !== 'TABLE') return;
+            const releases = [];
+            table.querySelectorAll('tr[data-release-title]').forEach(row => {
+                releases.push({
+                    artists: row.dataset.releaseArtists || '',
+                    title: row.dataset.releaseTitle || '',
+                    beatport_url: row.dataset.beatportUrl || '',
+                    spotify_url: row.dataset.spotifyUrl || '',
+                });
             });
+            if (releases.length > 0) {
+                sections.push({name: sectionName, releases: releases});
+            }
         });
-        return releases;
+        return sections;
     }
 
     async function createPlaylists() {
         const btn = document.getElementById('create-playlists-btn');
         const status = document.getElementById('create-playlists-status');
-        const name = document.getElementById('new-playlist-name').value.trim() || 'NMM Playlist';
-        const releases = collectReleases();
+        const prefix = document.getElementById('new-playlist-name').value.trim() || 'NMM';
+        const sections = collectSections();
 
-        if (releases.length === 0) {
+        if (sections.length === 0) {
             status.innerHTML = '<div class="alert alert-warning">No releases found. Run the scrape first.</div>';
             return;
         }
 
         btn.disabled = true;
         btn.textContent = 'Creating...';
-        status.innerHTML = '<div class="text-muted">Creating playlists and adding tracks...</div>';
+        status.innerHTML = '<div class="text-muted">Creating ' + sections.length + ' playlists per service...</div>';
 
         try {
             const resp = await fetch('/create-playlists', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({name: name, releases: releases})
+                body: JSON.stringify({prefix: prefix, sections: sections})
             });
             const data = await resp.json();
 
-            let html = '';
+            let html = '<table class="table table-sm"><thead><tr>' +
+                '<th>Playlist</th><th>Beatport</th><th>Spotify</th></tr></thead><tbody>';
 
-            if (data.beatport) {
-                if (data.beatport.success) {
-                    html += '<div class="alert alert-success mb-2">Beatport: Created "' +
-                        escapeHtml(data.beatport.playlist_name) + '" with ' +
-                        data.beatport.tracks_added + ' tracks</div>';
+            data.forEach(s => {
+                html += '<tr><td>' + escapeHtml(s.playlist_name) + '</td>';
+
+                if (s.beatport && s.beatport.success) {
+                    html += '<td class="text-success">' + s.beatport.tracks_added + ' tracks</td>';
+                } else if (s.beatport) {
+                    html += '<td class="text-danger">' + escapeHtml(s.beatport.error || 'Failed') + '</td>';
                 } else {
-                    html += '<div class="alert alert-danger mb-2">Beatport: ' +
-                        escapeHtml(data.beatport.error) + '</div>';
+                    html += '<td>—</td>';
                 }
-            }
 
-            if (data.spotify) {
-                if (data.spotify.success) {
-                    let spotifyMsg = 'Spotify: Created "' + escapeHtml(data.spotify.playlist_name) +
-                        '" with ' + data.spotify.tracks_added + ' tracks';
-                    if (data.spotify.playlist_url) {
-                        spotifyMsg += ' — <a href="' + escapeHtml(data.spotify.playlist_url) +
-                            '" target="_blank" rel="noopener">Open in Spotify</a>';
+                if (s.spotify && s.spotify.success) {
+                    let cell = s.spotify.tracks_added + ' tracks';
+                    if (s.spotify.playlist_url) {
+                        cell = '<a href="' + escapeHtml(s.spotify.playlist_url) +
+                            '" target="_blank" rel="noopener">' + cell + '</a>';
                     }
-                    html += '<div class="alert alert-success mb-2">' + spotifyMsg + '</div>';
+                    html += '<td class="text-success">' + cell + '</td>';
+                } else if (s.spotify) {
+                    html += '<td class="text-danger">' + escapeHtml(s.spotify.error || 'Failed') + '</td>';
                 } else {
-                    html += '<div class="alert alert-danger mb-2">Spotify: ' +
-                        escapeHtml(data.spotify.error) + '</div>';
+                    html += '<td>—</td>';
                 }
-            }
 
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
             status.innerHTML = html;
         } catch (err) {
             status.innerHTML = '<div class="alert alert-danger">Error: ' + err + '</div>';
