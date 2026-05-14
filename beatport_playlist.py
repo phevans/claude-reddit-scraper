@@ -25,7 +25,12 @@ def _load_cached_token() -> Optional[dict]:
         with open(_TOKEN_FILE) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return None
+        pass
+
+    env_refresh = os.environ.get("BEATPORT_REFRESH_TOKEN")
+    if env_refresh:
+        return {"refresh_token": env_refresh, "expires_at": 0}
+    return None
 
 
 def _save_token(token_data: dict) -> None:
@@ -38,70 +43,31 @@ def _token_is_valid(token_data: dict) -> bool:
     return time.time() < (expires_at - _TOKEN_EXPIRY_BUFFER)
 
 
-def _authenticate(username: str, password: str) -> dict:
-    """Login to Beatport and obtain OAuth tokens via authorization_code flow."""
-    session = requests.Session()
+def get_authorize_url(redirect_uri: str) -> str:
+    """Build the Beatport authorization URL for the user to visit."""
+    params = {
+        "response_type": "code",
+        "client_id": _CLIENT_ID,
+        "redirect_uri": redirect_uri,
+    }
+    qs = "&".join(f"{k}={requests.utils.quote(str(v))}" for k, v in params.items())
+    return f"{_BASE_URL}/v4/auth/o/authorize/?{qs}"
 
-    # Step 1: Login to get session cookies
-    login_resp = session.get(f"{_BASE_URL}/auth/login/")
-    csrf_token = session.cookies.get("csrftoken", "")
 
-    login_resp = session.post(
-        f"{_BASE_URL}/auth/login/",
-        data={
-            "username": username,
-            "password": password,
-            "csrfmiddlewaretoken": csrf_token,
-        },
-        headers={
-            "Referer": f"{_BASE_URL}/auth/login/",
-        },
-        allow_redirects=True,
-    )
-    if login_resp.status_code not in (200, 302):
-        raise RuntimeError(f"Beatport login failed: {login_resp.status_code}")
-
-    # Step 2: Request authorization code
-    auth_resp = session.get(
-        f"{_BASE_URL}/auth/o/authorize/",
-        params={
-            "response_type": "code",
-            "client_id": _CLIENT_ID,
-            "redirect_uri": _REDIRECT_URI,
-        },
-        allow_redirects=False,
-    )
-
-    # The redirect URL contains the authorization code
-    if auth_resp.status_code in (301, 302):
-        location = auth_resp.headers.get("Location", "")
-        code_match = re.search(r"[?&]code=([^&]+)", location)
-        if not code_match:
-            raise RuntimeError(f"No auth code in redirect: {location}")
-        auth_code = code_match.group(1)
-    else:
-        # Some flows return the code in the response body
-        code_match = re.search(r'"code"\s*:\s*"([^"]+)"', auth_resp.text)
-        if not code_match:
-            raise RuntimeError(
-                f"Could not obtain authorization code (status {auth_resp.status_code})"
-            )
-        auth_code = code_match.group(1)
-
-    # Step 3: Exchange code for tokens
+def exchange_code(code: str, redirect_uri: str) -> dict:
+    """Exchange an authorization code for access + refresh tokens."""
     token_resp = requests.post(
         f"{_BASE_URL}/v4/auth/o/token/",
         data={
-            "code": auth_code,
+            "code": code,
             "grant_type": "authorization_code",
-            "redirect_uri": _REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "client_id": _CLIENT_ID,
         },
     )
     token_resp.raise_for_status()
     token_data = token_resp.json()
 
-    # Calculate expires_at if not provided
     if "expires_at" not in token_data and "expires_in" in token_data:
         token_data["expires_at"] = time.time() + token_data["expires_in"]
 
@@ -129,8 +95,19 @@ def _refresh_access_token(refresh_token: str) -> dict:
     return token_data
 
 
+def is_authenticated() -> bool:
+    """Check whether we have valid Beatport user credentials."""
+    token_data = _load_cached_token()
+    if not token_data:
+        return False
+    if _token_is_valid(token_data):
+        return True
+    # Check if we can refresh
+    return bool(token_data.get("refresh_token"))
+
+
 def _get_valid_token() -> str:
-    """Get a valid access token, refreshing or re-authenticating as needed."""
+    """Get a valid access token, refreshing as needed."""
     token_data = _load_cached_token()
 
     if token_data and _token_is_valid(token_data):
@@ -142,18 +119,11 @@ def _get_valid_token() -> str:
             token_data = _refresh_access_token(token_data["refresh_token"])
             return token_data["access_token"]
         except requests.HTTPError:
-            pass  # Fall through to re-authenticate
+            pass
 
-    # Full re-authentication
-    username = os.environ.get("BEATPORT_USERNAME")
-    password = os.environ.get("BEATPORT_PASSWORD")
-    if not username or not password:
-        raise RuntimeError(
-            "Beatport token expired and no BEATPORT_USERNAME/BEATPORT_PASSWORD "
-            "set for re-authentication"
-        )
-    token_data = _authenticate(username, password)
-    return token_data["access_token"]
+    raise RuntimeError(
+        "Beatport not authenticated — click 'Connect Beatport' first"
+    )
 
 
 def _api_request(method: str, path: str, **kwargs) -> requests.Response:

@@ -7,8 +7,11 @@ from beatport_client import scrape_beatport_track_names, verify_beatport_link
 from beatport_playlist import (
     add_tracks_to_playlist as beatport_add_tracks_to_playlist,
     create_playlist as beatport_create_playlist,
+    exchange_code as beatport_exchange_code,
+    get_authorize_url as beatport_get_authorize_url,
     get_my_playlists,
     get_track_ids,
+    is_authenticated as beatport_is_authenticated,
 )
 from parser import parse_releases
 from reddit_client import get_latest_nmm_post
@@ -282,23 +285,26 @@ def beatport_add_tracks():
         return jsonify({"error": str(e)}), 500
 
 
-def _get_callback_uri():
-    """Build the Spotify callback URI, respecting CloudFront/proxy HTTPS."""
+def _get_callback_uri(path):
+    """Build a callback URI, respecting CloudFront/proxy HTTPS."""
     proto = request.headers.get("CloudFront-Forwarded-Proto",
                                 request.headers.get("X-Forwarded-Proto",
                                                     request.scheme))
     host = request.headers.get("Host", request.host)
-    return f"{proto}://{host}/spotify/callback"
+    return f"{proto}://{host}{path}"
 
 
-@app.route("/spotify/auth-status")
-def spotify_auth_status():
-    return jsonify({"authenticated": spotify_is_authenticated()})
+@app.route("/auth-status")
+def auth_status():
+    return jsonify({
+        "spotify": spotify_is_authenticated(),
+        "beatport": beatport_is_authenticated(),
+    })
 
 
 @app.route("/spotify/login")
 def spotify_login():
-    redirect_uri = _get_callback_uri()
+    redirect_uri = _get_callback_uri("/spotify/callback")
     url = spotify_get_authorize_url(redirect_uri)
     return redirect(url)
 
@@ -311,8 +317,28 @@ def spotify_callback():
         return f"Spotify authorization failed: {error}", 400
     if not code:
         return "Missing authorization code", 400
-    redirect_uri = _get_callback_uri()
+    redirect_uri = _get_callback_uri("/spotify/callback")
     spotify_exchange_code(code, redirect_uri)
+    return redirect("/")
+
+
+@app.route("/beatport/login")
+def beatport_login():
+    redirect_uri = _get_callback_uri("/beatport/callback")
+    url = beatport_get_authorize_url(redirect_uri)
+    return redirect(url)
+
+
+@app.route("/beatport/callback")
+def beatport_callback():
+    code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        return f"Beatport authorization failed: {error}", 400
+    if not code:
+        return "Missing authorization code", 400
+    redirect_uri = _get_callback_uri("/beatport/callback")
+    beatport_exchange_code(code, redirect_uri)
     return redirect("/")
 
 
@@ -334,21 +360,24 @@ def create_playlists():
 
         # Beatport
         try:
-            bp_track_ids = []
-            for rel in releases:
-                beatport_url = rel.get("beatport_url", "")
-                if beatport_url:
-                    ids = get_track_ids(beatport_url)
-                    bp_track_ids.extend(ids)
-            if bp_track_ids:
-                bp_playlist = beatport_create_playlist(playlist_name)
-                beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
-                section_result["beatport"] = {
-                    "success": True,
-                    "tracks_added": len(bp_track_ids),
-                }
+            if not beatport_is_authenticated():
+                section_result["beatport"] = {"success": False, "error": "Not authenticated"}
             else:
-                section_result["beatport"] = {"success": True, "tracks_added": 0}
+                bp_track_ids = []
+                for rel in releases:
+                    beatport_url = rel.get("beatport_url", "")
+                    if beatport_url:
+                        ids = get_track_ids(beatport_url)
+                        bp_track_ids.extend(ids)
+                if bp_track_ids:
+                    bp_playlist = beatport_create_playlist(playlist_name)
+                    beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
+                    section_result["beatport"] = {
+                        "success": True,
+                        "tracks_added": len(bp_track_ids),
+                    }
+                else:
+                    section_result["beatport"] = {"success": True, "tracks_added": 0}
         except Exception as e:
             section_result["beatport"] = {"success": False, "error": str(e)}
 

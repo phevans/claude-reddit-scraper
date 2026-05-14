@@ -199,6 +199,7 @@
                             <input type="text" id="new-playlist-name" class="form-control" value="NMM">
                         </div>
                         <div class="col-auto">
+                            <span id="beatport-auth-status" class="badge bg-secondary">Checking Beatport...</span>
                             <span id="spotify-auth-status" class="badge bg-secondary">Checking Spotify...</span>
                         </div>
                         <div class="col-auto">
@@ -634,25 +635,35 @@
 
     function showCreatePlaylistsPanel() {
         document.getElementById('create-playlists-panel').style.display = 'block';
-        checkSpotifyAuth();
+        checkAuthStatus();
     }
 
-    function checkSpotifyAuth() {
-        const badge = document.getElementById('spotify-auth-status');
-        fetch('/spotify/auth-status')
+    function checkAuthStatus() {
+        const spBadge = document.getElementById('spotify-auth-status');
+        const bpBadge = document.getElementById('beatport-auth-status');
+        fetch('/auth-status')
             .then(r => r.json())
             .then(data => {
-                if (data.authenticated) {
-                    badge.className = 'badge bg-success';
-                    badge.textContent = 'Spotify connected';
+                if (data.spotify) {
+                    spBadge.className = 'badge bg-success';
+                    spBadge.textContent = 'Spotify connected';
                 } else {
-                    badge.className = 'badge bg-warning text-dark';
-                    badge.innerHTML = '<a href="/spotify/login" class="text-dark">Connect Spotify</a>';
+                    spBadge.className = 'badge bg-warning text-dark';
+                    spBadge.innerHTML = '<a href="/spotify/login" class="text-dark">Connect Spotify</a>';
+                }
+                if (data.beatport) {
+                    bpBadge.className = 'badge bg-success';
+                    bpBadge.textContent = 'Beatport connected';
+                } else {
+                    bpBadge.className = 'badge bg-warning text-dark';
+                    bpBadge.innerHTML = '<a href="/beatport/login" class="text-dark">Connect Beatport</a>';
                 }
             })
             .catch(() => {
-                badge.className = 'badge bg-danger';
-                badge.textContent = 'Spotify check failed';
+                spBadge.className = 'badge bg-danger';
+                spBadge.textContent = 'Check failed';
+                bpBadge.className = 'badge bg-danger';
+                bpBadge.textContent = 'Check failed';
             });
     }
 
