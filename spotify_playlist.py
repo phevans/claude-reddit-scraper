@@ -64,7 +64,13 @@ def _load_cached_token() -> dict | None:
             _user_token_cache.update(data)
             return data
     except (FileNotFoundError, json.JSONDecodeError):
-        return None
+        pass
+
+    # Fall back to env var (for EB where token file doesn't persist)
+    env_refresh = os.environ.get("SPOTIFY_REFRESH_TOKEN")
+    if env_refresh:
+        return {"refresh_token": env_refresh, "expires_at": 0}
+    return None
 
 
 def _refresh_access_token(refresh_token: str) -> dict:
