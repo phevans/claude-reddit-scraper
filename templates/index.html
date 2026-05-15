@@ -690,81 +690,114 @@
             .catch(err => alert('Failed to get Spotify authorize URL: ' + err));
     }
 
+    // Browser-side PKCE helpers ------------------------------------------
+    function bpRandomVerifier() {
+        // 64 random bytes → base64url (no padding) → ~86 chars, PKCE-legal
+        const bytes = new Uint8Array(64);
+        crypto.getRandomValues(bytes);
+        let s = btoa(String.fromCharCode.apply(null, bytes));
+        return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function bpChallenge(verifier) {
+        const enc = new TextEncoder();
+        const digest = await crypto.subtle.digest('SHA-256', enc.encode(verifier));
+        let s = btoa(String.fromCharCode.apply(null, new Uint8Array(digest)));
+        return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
     function connectBeatport() {
-        // Register listener BEFORE opening popup so we don't miss the message
+        // Do the full OAuth flow client-side: Beatport ties auth codes to
+        // the browser session that initiated authorize, so the token
+        // exchange must come from the browser too — not from our server.
+        const BP_CLIENT_ID = 'eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1';
+        const BP_AUTHORIZE = 'https://account.beatport.com/o/authorize/';
+        const BP_TOKEN = 'https://account.beatport.com/o/token/';
+        const POST_MSG_URI = 'https://api.beatport.com/v4/auth/o/post-message/';
+        const targetOrigin = window.location.origin;
+        const redirectUri = POST_MSG_URI + '?target=' + encodeURIComponent(targetOrigin);
+
         let popup = null;
         let messageReceived = false;
+        const verifier = bpRandomVerifier();
 
-        function handler(event) {
-            console.log('[Beatport] message received from', event.origin, event.data);
-            // Accept messages from Beatport's domains
-            if (event.origin !== 'https://account.beatport.com' && event.origin !== 'https://api.beatport.com') {
-                console.log('[Beatport] ignoring message from non-Beatport origin');
-                return;
-            }
-            messageReceived = true;
-            window.removeEventListener('message', handler);
-            if (popup) popup.close();
+        bpChallenge(verifier).then(challenge => {
+            const params = new URLSearchParams({
+                response_type: 'code',
+                client_id: BP_CLIENT_ID,
+                redirect_uri: redirectUri,
+                code_challenge: challenge,
+                code_challenge_method: 'S256',
+            });
+            const url = BP_AUTHORIZE + '?' + params.toString();
+            console.log('[Beatport] opening popup:', url);
 
-            if (event.data && event.data.error) {
-                const err = event.data.error;
-                const msg = err && (err.message || err.toString()) || JSON.stringify(err);
-                alert('Beatport authorization error: ' + msg);
-                return;
-            }
+            function handler(event) {
+                console.log('[Beatport] message from', event.origin, event.data);
+                if (event.origin !== 'https://account.beatport.com' && event.origin !== 'https://api.beatport.com') return;
+                messageReceived = true;
+                window.removeEventListener('message', handler);
+                if (popup) popup.close();
 
-            const code = event.data && event.data.code;
-            if (!code) {
-                alert('Beatport authorization failed: no code in message. Data: ' + JSON.stringify(event.data));
-                return;
-            }
-
-            console.log('[Beatport] exchanging code...');
-            fetch('/beatport/exchange', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({code: code})
-            })
-            .then(r => r.json())
-            .then(result => {
-                console.log('[Beatport] exchange result:', result);
-                if (result._debug) {
-                    console.log('[Beatport] exchange debug:', result._debug);
+                if (event.data && event.data.error) {
+                    const err = event.data.error;
+                    alert('Beatport auth error: ' + (err && (err.message || err.toString()) || JSON.stringify(err)));
+                    return;
                 }
-                if (result.success) {
-                    checkAuthStatus();
-                } else {
-                    alert('Beatport token exchange failed: ' + (result.error || 'Unknown error'));
+                const code = event.data && event.data.code;
+                if (!code) {
+                    alert('Beatport auth failed: no code. ' + JSON.stringify(event.data));
+                    return;
                 }
-            })
-            .catch(err => alert('Beatport exchange error: ' + err));
-        }
 
-        window.addEventListener('message', handler);
-
-        fetch('/beatport/authorize-url')
-            .then(r => r.json())
-            .then(data => {
-                console.log('[Beatport] authorize-url debug:', data._debug);
-                console.log('[Beatport] opening popup:', data.url);
-                popup = window.open(data.url, 'beatport_auth', 'width=600,height=700');
-
-                // Watch for popup being closed without sending a message
-                const watchdog = setInterval(() => {
-                    if (messageReceived) {
-                        clearInterval(watchdog);
+                // Exchange the code directly with Beatport, then send the tokens to our backend.
+                const body = new URLSearchParams({
+                    grant_type: 'authorization_code',
+                    code: code,
+                    redirect_uri: redirectUri,
+                    code_verifier: verifier,
+                    client_id: BP_CLIENT_ID,
+                });
+                fetch(BP_TOKEN, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: body.toString(),
+                })
+                .then(r => r.json())
+                .then(tok => {
+                    console.log('[Beatport] token response:', tok);
+                    if (tok.error) {
+                        alert('Beatport token exchange failed: ' + tok.error + ' - ' + (tok.description || tok.error_description || ''));
                         return;
                     }
-                    if (popup && popup.closed) {
-                        clearInterval(watchdog);
-                        if (!messageReceived) {
-                            window.removeEventListener('message', handler);
-                            console.warn('[Beatport] popup closed without sending message');
+                    // Hand off tokens to our server to store
+                    return fetch('/beatport/store-token', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(tok),
+                    }).then(r => r.json()).then(result => {
+                        if (result.success) {
+                            checkAuthStatus();
+                        } else {
+                            alert('Beatport token storage failed: ' + (result.error || 'Unknown'));
                         }
-                    }
-                }, 500);
-            })
-            .catch(err => alert('Failed to get Beatport authorize URL: ' + err));
+                    });
+                })
+                .catch(err => alert('Beatport token request error: ' + err));
+            }
+
+            window.addEventListener('message', handler);
+            popup = window.open(url, 'beatport_auth', 'width=600,height=700');
+
+            const watchdog = setInterval(() => {
+                if (messageReceived) { clearInterval(watchdog); return; }
+                if (popup && popup.closed) {
+                    clearInterval(watchdog);
+                    window.removeEventListener('message', handler);
+                    if (!messageReceived) console.warn('[Beatport] popup closed without sending message');
+                }
+            }, 500);
+        });
     }
 
     function collectSections() {

@@ -387,6 +387,29 @@ def beatport_authorize_url():
     return jsonify({"url": url, "_debug": {"verifier_hash": vhash, "target": target}})
 
 
+@app.route("/beatport/store-token", methods=["POST"])
+def beatport_store_token():
+    """Receive a Beatport token (exchanged client-side) and persist it.
+
+    Beatport binds auth codes to the originating browser session, so
+    the token exchange has to happen in the user's browser. The
+    browser POSTs the resulting token here for server-side storage.
+    """
+    import time as _time
+    import beatport_playlist as bp
+    data = request.get_json()
+    if not data or "access_token" not in data:
+        return jsonify({"error": "Missing access_token in payload"}), 400
+    token_data = dict(data)
+    if "expires_at" not in token_data and "expires_in" in token_data:
+        token_data["expires_at"] = _time.time() + token_data["expires_in"]
+    try:
+        bp._save_token(token_data)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/beatport/exchange", methods=["POST"])
 def beatport_exchange():
     """Exchange a Beatport auth code (from postMessage popup) for tokens."""

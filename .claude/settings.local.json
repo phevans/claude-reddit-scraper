@@ -107,7 +107,24 @@
       "Read(//private/tmp/**)",
       "Bash(rm -rf eb_logs)",
       "Bash(mkdir eb_logs)",
-      "Bash(unzip -q /Users/phil/Code/claude-reddit-scraper/.elasticbeanstalk/logs/260515_150938.zip -d eb_logs)"
+      "Bash(unzip -q /Users/phil/Code/claude-reddit-scraper/.elasticbeanstalk/logs/260515_150938.zip -d eb_logs)",
+      "Bash(grep -oP \"code_verifier[^,;}]{0,200}\")",
+      "Bash(grep -oP \".{0,100}code_challenge.{0,500}\")",
+      "WebFetch(domain:partnerportal.beatport.com)",
+      "Bash(grep -oP \"tokenUrl[^}]{0,500}\")",
+      "Bash(grep -oP \"\\\\\"/o/token/\\\\\":\\\\{post.{0,3000}\")",
+      "Bash(grep -oE \"eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1|[A-Za-z0-9]{30,50}\")",
+      "Bash(grep -v \"^[0-9a-f]\\\\{32\\\\}$\")",
+      "Bash(grep -oP \"\\(clientId|client_id\\)[\\\\\":]+[\\\\\"'][A-Za-z0-9]{20,50}[\\\\\"']\")",
+      "Bash(curl -s -X POST https://account.beatport.com/o/token/ -d 'grant_type=password&username=test&password=test&client_id=eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1')",
+      "Bash(curl -s -X POST https://account.beatport.com/o/token/ -u eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1: -d 'grant_type=password&username=test&password=test')",
+      "Bash(curl -s -X POST https://api.beatport.com/v4/auth/o/token/ -d 'grant_type=password&username=test&password=test&client_id=eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1')",
+      "Bash(curl -s -X POST https://api.beatport.com/v4/auth/login/ -H 'Content-Type: application/json' -d '{\"username\":\"test\",\"password\":\"test\"}' -o /dev/null -w '%{http_code}\\\\n')",
+      "Bash(curl -s -X POST https://api.beatport.com/v4/auth/login/ -H 'Content-Type: application/json' -d '{}' -o /dev/null -w '%{http_code}\\\\n')",
+      "Bash(curl -sv -X POST https://api.beatport.com/v4/auth/login/ -H 'Content-Type: application/json' -d '{\"username\":\"test\",\"password\":\"test\"}')",
+      "Bash(curl -s -X POST https://api.beatport.com/v4/auth/o/token/ -u eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1: -d 'grant_type=authorization_code&code=test&redirect_uri=https%3A%2F%2Fapi.beatport.com%2Fv4%2Fauth%2Fo%2Fpost-message%2F&code_verifier=test')",
+      "Bash(curl -s -X POST https://api.beatport.com/auth/o/token/ -u eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1: -d 'grant_type=authorization_code&code=test&redirect_uri=https%3A%2F%2Fapi.beatport.com%2Fauth%2Fo%2Fpost-message%2F&code_verifier=test')",
+      "Bash(curl -s -X OPTIONS https://account.beatport.com/o/token/ -H 'Origin: https://d28eojbfl0i6i1.cloudfront.net' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: Content-Type,Authorization' -D -)"
     ]
   }
 }
