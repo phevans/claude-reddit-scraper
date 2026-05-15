@@ -15,7 +15,8 @@ load_dotenv()
 _BASE_URL = "https://api.beatport.com"
 _CLIENT_ID = "eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1"
 _ACCOUNT_BASE = "https://account.beatport.com"
-_REDIRECT_URI = "https://api.beatport.com/auth/o/post-message/"
+# Base post-message URI registered for this public client
+_POST_MESSAGE_URI = "https://api.beatport.com/v4/auth/o/post-message/"
 _TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 
@@ -45,31 +46,44 @@ def _token_is_valid(token_data: dict) -> bool:
     return time.time() < (expires_at - _TOKEN_EXPIRY_BUFFER)
 
 
-def get_authorize_url() -> str:
+def _build_redirect_uri(target_origin: str) -> str:
+    """The Beatport post-message page requires a ?target=ORIGIN query
+    string to know which origin to postMessage the auth code to."""
+    return f"{_POST_MESSAGE_URI}?target={target_origin}"
+
+
+def get_authorize_url(target_origin: str) -> str:
     """Build the Beatport authorization URL via account.beatport.com.
 
     account.beatport.com/o/authorize/ redirects to the SPA login page
     with a relative ``next`` path (absolute URLs are rejected by the
     SPA's client-side validation). After login the SPA navigates back
-    to /o/authorize/ which issues the auth code via post-message.
+    to /o/authorize/ which issues the auth code by redirecting to the
+    post-message page, which postMessages the code to target_origin.
     """
+    redirect_uri = _build_redirect_uri(target_origin)
     params = {
         "response_type": "code",
         "client_id": _CLIENT_ID,
-        "redirect_uri": _REDIRECT_URI,
+        "redirect_uri": redirect_uri,
     }
     qs = "&".join(f"{k}={_url_quote(str(v), safe='')}" for k, v in params.items())
     return f"{_ACCOUNT_BASE}/o/authorize/?{qs}"
 
 
-def exchange_code(code: str) -> dict:
-    """Exchange an authorization code for access + refresh tokens."""
+def exchange_code(code: str, target_origin: str) -> dict:
+    """Exchange an authorization code for access + refresh tokens.
+
+    The redirect_uri sent here must match the one sent to authorize,
+    including the ?target=ORIGIN query string.
+    """
+    redirect_uri = _build_redirect_uri(target_origin)
     token_resp = requests.post(
         f"{_ACCOUNT_BASE}/o/token/",
         data={
             "code": code,
             "grant_type": "authorization_code",
-            "redirect_uri": _REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "client_id": _CLIENT_ID,
         },
     )

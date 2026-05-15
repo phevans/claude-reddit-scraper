@@ -329,10 +329,20 @@ def spotify_callback():
     </script><p>Spotify connected! You can close this window.</p></body></html>"""
 
 
+def _target_origin():
+    """Build the origin URL (scheme://host) of our app, for the
+    Beatport post-message target."""
+    proto = request.headers.get("CloudFront-Forwarded-Proto",
+                                request.headers.get("X-Forwarded-Proto",
+                                                    request.scheme))
+    host = request.headers.get("Host", request.host)
+    return f"{proto}://{host}"
+
+
 @app.route("/beatport/authorize-url")
 def beatport_authorize_url():
     """Return the Beatport OAuth authorize URL for the popup flow."""
-    url = beatport_get_authorize_url()
+    url = beatport_get_authorize_url(_target_origin())
     return jsonify({"url": url})
 
 
@@ -344,7 +354,7 @@ def beatport_exchange():
     if not code:
         return jsonify({"error": "Missing authorization code"}), 400
     try:
-        beatport_exchange_code(code)
+        beatport_exchange_code(code, _target_origin())
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
