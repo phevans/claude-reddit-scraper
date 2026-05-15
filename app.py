@@ -381,6 +381,9 @@ def beatport_authorize_url():
     """
     url, verifier = beatport_get_authorize_url(_target_origin())
     session["beatport_pkce_verifier"] = verifier
+    import hashlib as _hl
+    vhash = _hl.sha1(verifier.encode()).hexdigest()[:8]
+    print(f"[beatport-auth] authorize-url verifier hash={vhash} target={_target_origin()}")
     return jsonify({"url": url})
 
 
@@ -394,12 +397,15 @@ def beatport_exchange():
     verifier = session.get("beatport_pkce_verifier")
     if not verifier:
         return jsonify({"error": "Missing PKCE verifier in session - retry login"}), 400
+    import hashlib as _hl
+    vhash = _hl.sha1(verifier.encode()).hexdigest()[:8]
+    print(f"[beatport-auth] exchange verifier hash={vhash} target={_target_origin()} code={code[:8]}...")
     try:
         beatport_exchange_code(code, _target_origin(), verifier)
         session.pop("beatport_pkce_verifier", None)
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "verifier_hash": vhash}), 500
 
 
 @app.route("/create-playlists", methods=["POST"])
