@@ -327,6 +327,9 @@ def debug_beatport_token():
             info["token_type"] = data.get("token_type")
             info["has_access_token"] = bool(data.get("access_token"))
             info["has_refresh_token"] = bool(data.get("refresh_token"))
+            if "error" in data:
+                info["error"] = data.get("error")
+                info["description"] = data.get("description")
         except Exception as e:
             info["read_error"] = str(e)
     return jsonify(info)

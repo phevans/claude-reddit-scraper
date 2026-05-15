@@ -110,6 +110,12 @@ def exchange_code(code: str, target_origin: str, code_verifier: str) -> dict:
         )
     token_data = token_resp.json()
 
+    # Beatport sometimes returns HTTP 200 with an error body instead of a 4xx
+    if "error" in token_data or "access_token" not in token_data:
+        raise RuntimeError(
+            f"Beatport token exchange failed: {token_resp.status_code} {token_resp.text}"
+        )
+
     if "expires_at" not in token_data and "expires_in" in token_data:
         token_data["expires_at"] = time.time() + token_data["expires_in"]
 
