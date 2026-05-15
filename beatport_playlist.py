@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import time
 from typing import Optional
 from urllib.parse import quote as _url_quote
@@ -52,30 +55,43 @@ def _build_redirect_uri(target_origin: str) -> str:
     return f"{_POST_MESSAGE_URI}?target={target_origin}"
 
 
-def get_authorize_url(target_origin: str) -> str:
+def _generate_pkce_verifier() -> str:
+    """Generate a PKCE code_verifier (43-128 chars, URL-safe)."""
+    return secrets.token_urlsafe(64)[:128]
+
+
+def _pkce_challenge(verifier: str) -> str:
+    """Compute the S256 PKCE code_challenge from a verifier."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def get_authorize_url(target_origin: str) -> tuple[str, str]:
     """Build the Beatport authorization URL via account.beatport.com.
 
-    account.beatport.com/o/authorize/ redirects to the SPA login page
-    with a relative ``next`` path (absolute URLs are rejected by the
-    SPA's client-side validation). After login the SPA navigates back
-    to /o/authorize/ which issues the auth code by redirecting to the
-    post-message page, which postMessages the code to target_origin.
+    Returns (url, code_verifier). The verifier must be stored and
+    passed back to exchange_code(). Beatport requires PKCE.
     """
+    verifier = _generate_pkce_verifier()
+    challenge = _pkce_challenge(verifier)
     redirect_uri = _build_redirect_uri(target_origin)
     params = {
         "response_type": "code",
         "client_id": _CLIENT_ID,
         "redirect_uri": redirect_uri,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
     }
     qs = "&".join(f"{k}={_url_quote(str(v), safe='')}" for k, v in params.items())
-    return f"{_ACCOUNT_BASE}/o/authorize/?{qs}"
+    return f"{_ACCOUNT_BASE}/o/authorize/?{qs}", verifier
 
 
-def exchange_code(code: str, target_origin: str) -> dict:
+def exchange_code(code: str, target_origin: str, code_verifier: str) -> dict:
     """Exchange an authorization code for access + refresh tokens.
 
-    The redirect_uri sent here must match the one sent to authorize,
-    including the ?target=ORIGIN query string.
+    The redirect_uri must match what was sent to authorize (including
+    ?target=ORIGIN). The code_verifier is the PKCE verifier returned
+    by get_authorize_url().
     """
     redirect_uri = _build_redirect_uri(target_origin)
     token_resp = requests.post(
@@ -85,6 +101,7 @@ def exchange_code(code: str, target_origin: str) -> dict:
             "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
             "client_id": _CLIENT_ID,
+            "code_verifier": code_verifier,
         },
     )
     token_resp.raise_for_status()

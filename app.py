@@ -1,7 +1,8 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, stream_with_context
 
 from beatport_client import scrape_beatport_track_names, verify_beatport_link
 from beatport_playlist import (
@@ -29,6 +30,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-please-set-in-prod")
 
 MAX_WORKERS = 10
 PREFERRED_SERVICE_ORDER = ["Beatport", "Bandcamp", "Spotify"]
@@ -341,8 +343,13 @@ def _target_origin():
 
 @app.route("/beatport/authorize-url")
 def beatport_authorize_url():
-    """Return the Beatport OAuth authorize URL for the popup flow."""
-    url = beatport_get_authorize_url(_target_origin())
+    """Return the Beatport OAuth authorize URL for the popup flow.
+
+    Stores the PKCE code_verifier in the session so /beatport/exchange
+    can use it.
+    """
+    url, verifier = beatport_get_authorize_url(_target_origin())
+    session["beatport_pkce_verifier"] = verifier
     return jsonify({"url": url})
 
 
@@ -353,8 +360,12 @@ def beatport_exchange():
     code = data.get("code")
     if not code:
         return jsonify({"error": "Missing authorization code"}), 400
+    verifier = session.get("beatport_pkce_verifier")
+    if not verifier:
+        return jsonify({"error": "Missing PKCE verifier in session - retry login"}), 400
     try:
-        beatport_exchange_code(code, _target_origin())
+        beatport_exchange_code(code, _target_origin(), verifier)
+        session.pop("beatport_pkce_verifier", None)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
