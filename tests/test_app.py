@@ -40,7 +40,7 @@ class TestScrape:
                 data_lines = []
         return events
 
-    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone"))
+    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone", 0))
     @patch("app.verify_spotify_link", return_value=(1.0, "Home Alone"))
     @patch("app.get_latest_nmm_post")
     def test_scrape_streams_sections(self, mock_get_post, mock_spotify, mock_beatport, client, sample_post_html):
@@ -57,7 +57,7 @@ class TestScrape:
         assert "section" in event_types
         assert "done" in event_types
 
-    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone"))
+    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone", 0))
     @patch("app.verify_spotify_link", return_value=(1.0, "Home Alone"))
     @patch("app.get_latest_nmm_post")
     def test_scrape_streams_both_subgenres(self, mock_get_post, mock_spotify, mock_beatport, client, sample_post_html):
@@ -69,7 +69,7 @@ class TestScrape:
         assert "Dancefloor" in section_events[0]
         assert "Liquid" in section_events[1]
 
-    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone"))
+    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone", 0))
     @patch("app.verify_spotify_link", return_value=(1.0, "Home Alone"))
     @patch("app.get_latest_nmm_post")
     def test_scrape_section_contains_release_data(self, mock_get_post, mock_spotify, mock_beatport, client, sample_post_html):
@@ -81,7 +81,7 @@ class TestScrape:
         assert "Jack (Hoax Rework)" in section_events[0]
         assert "Hospital" in section_events[0]
 
-    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone"))
+    @patch("app.verify_beatport_link", return_value=(1.0, "Home Alone", 0))
     @patch("app.verify_spotify_link", return_value=(1.0, "Home Alone"))
     @patch("app.get_latest_nmm_post")
     def test_scrape_green_on_exact_match(self, mock_get_post, mock_spotify, mock_beatport, client, sample_post_html):
@@ -90,7 +90,7 @@ class TestScrape:
         section_html = " ".join(data for evt, data in events if evt == "section")
         assert "link-match-exact" in section_html
 
-    @patch("app.verify_beatport_link", return_value=(0.8, "Wrong Beatport Title"))
+    @patch("app.verify_beatport_link", return_value=(0.8, "Wrong Beatport Title", 0))
     @patch("app.verify_spotify_link", return_value=(0.8, "Wrong Spotify Title"))
     @patch("app.get_latest_nmm_post")
     def test_scrape_orange_on_partial_match(self, mock_get_post, mock_spotify, mock_beatport, client, sample_post_html):
@@ -102,7 +102,7 @@ class TestScrape:
         assert "Wrong Spotify Title" in section_html
         assert "Wrong Beatport Title" in section_html
 
-    @patch("app.verify_beatport_link", return_value=(0.3, "Totally Wrong"))
+    @patch("app.verify_beatport_link", return_value=(0.3, "Totally Wrong", 0))
     @patch("app.verify_spotify_link", return_value=(0.3, "Completely Different"))
     @patch("app.get_latest_nmm_post")
     def test_scrape_red_on_low_match(self, mock_get_post, mock_spotify, mock_beatport, client, sample_post_html):

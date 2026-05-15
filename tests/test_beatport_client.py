@@ -55,7 +55,8 @@ class TestVerifyBeatportLink:
             "Home Alone (Extended Mix)",
             "https://www.beatport.com/release/home-alone/5898264",
         )
-        assert result == (1.0, "Home Alone (Extended Mix)")
+        assert result[0] == 1.0
+        assert result[1] == "Home Alone (Extended Mix)"
 
     @patch("beatport_client.requests.get")
     def test_partial_match(self, mock_get):
@@ -64,7 +65,7 @@ class TestVerifyBeatportLink:
         mock_response.text = BEATPORT_HTML
         mock_get.return_value = mock_response
 
-        score, title = verify_beatport_link(
+        score, title, _ = verify_beatport_link(
             "Home Alone",
             "https://www.beatport.com/release/home-alone/5898264",
         )
