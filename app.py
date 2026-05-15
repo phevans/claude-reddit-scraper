@@ -306,6 +306,32 @@ def auth_status():
     })
 
 
+@app.route("/debug/beatport-token")
+def debug_beatport_token():
+    """Temporary debug: show what's in the Beatport token file."""
+    import os as _os
+    import beatport_playlist as bp
+    info = {
+        "token_file_path": bp._TOKEN_FILE,
+        "token_file_exists": _os.path.exists(bp._TOKEN_FILE),
+        "is_authenticated": bp.is_authenticated(),
+    }
+    if info["token_file_exists"]:
+        try:
+            with open(bp._TOKEN_FILE) as f:
+                import json as _json
+                data = _json.load(f)
+            # Redact sensitive bits
+            info["token_keys"] = sorted(data.keys())
+            info["expires_at"] = data.get("expires_at")
+            info["token_type"] = data.get("token_type")
+            info["has_access_token"] = bool(data.get("access_token"))
+            info["has_refresh_token"] = bool(data.get("refresh_token"))
+        except Exception as e:
+            info["read_error"] = str(e)
+    return jsonify(info)
+
+
 @app.route("/spotify/authorize-url")
 def spotify_authorize_url():
     """Return the Spotify OAuth authorize URL for the popup flow."""
