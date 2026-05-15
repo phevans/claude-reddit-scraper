@@ -100,9 +100,9 @@ def exchange_code(code: str, target_origin: str, code_verifier: str) -> dict:
             "code": code,
             "grant_type": "authorization_code",
             "redirect_uri": redirect_uri,
-            "client_id": _CLIENT_ID,
             "code_verifier": code_verifier,
         },
+        auth=(_CLIENT_ID, ""),
     )
     if not token_resp.ok:
         raise RuntimeError(
@@ -124,8 +124,8 @@ def _refresh_access_token(refresh_token: str) -> dict:
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": _CLIENT_ID,
         },
+        auth=(_CLIENT_ID, ""),
     )
     resp.raise_for_status()
     token_data = resp.json()
