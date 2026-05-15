@@ -189,7 +189,7 @@
             </div>
         </div>
 
-        <div id="create-playlists-panel" class="mb-4" style="display: none;">
+        <div id="create-playlists-panel" class="mb-4">
             <div class="card">
                 <div class="card-body">
                     <h5 class="card-title">Create Playlists</h5>
@@ -203,7 +203,7 @@
                             <span id="spotify-auth-status" class="badge bg-secondary">Checking Spotify...</span>
                         </div>
                         <div class="col-auto">
-                            <button id="create-playlists-btn" class="btn btn-success" onclick="createPlaylists()">
+                            <button id="create-playlists-btn" class="btn btn-success" onclick="createPlaylists()" disabled>
                                 Create Playlists
                             </button>
                         </div>
@@ -634,9 +634,16 @@
     }
 
     function showCreatePlaylistsPanel() {
-        document.getElementById('create-playlists-panel').style.display = 'block';
-        checkAuthStatus();
+        // Enable the Create Playlists button once releases are loaded
+        const btn = document.getElementById('create-playlists-btn');
+        if (btn) btn.disabled = false;
     }
+
+    // Check auth status as soon as the page loads so the Connect buttons
+    // appear immediately, without waiting for a scrape to finish.
+    document.addEventListener('DOMContentLoaded', function() {
+        checkAuthStatus();
+    });
 
     function checkAuthStatus() {
         const spBadge = document.getElementById('spotify-auth-status');
