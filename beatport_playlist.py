@@ -89,11 +89,12 @@ def get_authorize_url(target_origin: str) -> tuple[str, str]:
 def exchange_code(code: str, target_origin: str, code_verifier: str) -> dict:
     """Exchange an authorization code for access + refresh tokens.
 
-    The redirect_uri must match what was sent to authorize (including
-    ?target=ORIGIN). The code_verifier is the PKCE verifier returned
-    by get_authorize_url().
+    The code_verifier is the PKCE verifier returned by
+    get_authorize_url(). Beatport's token endpoint seems to require
+    the bare post-message URI (without the ?target= query string)
+    even though we send the full URI to authorize.
     """
-    redirect_uri = _build_redirect_uri(target_origin)
+    redirect_uri = _POST_MESSAGE_URI
     token_resp = requests.post(
         f"{_ACCOUNT_BASE}/o/token/",
         data={
