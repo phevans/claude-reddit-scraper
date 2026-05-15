@@ -691,8 +691,8 @@
                 const popup = window.open(data.url, 'beatport_auth', 'width=600,height=700');
                 // Listen for the postMessage from Beatport's redirect page
                 window.addEventListener('message', function handler(event) {
-                    // Accept messages from Beatport's domain
-                    if (event.origin !== 'https://api.beatport.com') return;
+                    // Accept messages from Beatport's domains
+                    if (event.origin !== 'https://account.beatport.com' && event.origin !== 'https://api.beatport.com') return;
                     window.removeEventListener('message', handler);
                     if (popup) popup.close();
 

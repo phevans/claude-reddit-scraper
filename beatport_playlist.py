@@ -14,7 +14,8 @@ load_dotenv()
 
 _BASE_URL = "https://api.beatport.com"
 _CLIENT_ID = "eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1"
-_REDIRECT_URI = "https://api.beatport.com/v4/auth/o/post-message/"
+_ACCOUNT_BASE = "https://account.beatport.com"
+_REDIRECT_URI = f"{_ACCOUNT_BASE}/o/post-message/"
 _TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 
@@ -45,20 +46,26 @@ def _token_is_valid(token_data: dict) -> bool:
 
 
 def get_authorize_url() -> str:
-    """Build the Beatport authorization URL for the user to visit."""
+    """Build the Beatport authorization URL via account.beatport.com.
+
+    account.beatport.com/o/authorize/ redirects to the SPA login page
+    with a relative ``next`` path (absolute URLs are rejected by the
+    SPA's client-side validation). After login the SPA navigates back
+    to /o/authorize/ which issues the auth code via post-message.
+    """
     params = {
         "response_type": "code",
         "client_id": _CLIENT_ID,
         "redirect_uri": _REDIRECT_URI,
     }
     qs = "&".join(f"{k}={_url_quote(str(v), safe='')}" for k, v in params.items())
-    return f"{_BASE_URL}/v4/auth/o/authorize/?{qs}"
+    return f"{_ACCOUNT_BASE}/o/authorize/?{qs}"
 
 
 def exchange_code(code: str) -> dict:
     """Exchange an authorization code for access + refresh tokens."""
     token_resp = requests.post(
-        f"{_BASE_URL}/v4/auth/o/token/",
+        f"{_ACCOUNT_BASE}/o/token/",
         data={
             "code": code,
             "grant_type": "authorization_code",
@@ -79,7 +86,7 @@ def exchange_code(code: str) -> dict:
 def _refresh_access_token(refresh_token: str) -> dict:
     """Use refresh token to obtain a new access token."""
     resp = requests.post(
-        f"{_BASE_URL}/v4/auth/o/token/",
+        f"{_ACCOUNT_BASE}/o/token/",
         data={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
