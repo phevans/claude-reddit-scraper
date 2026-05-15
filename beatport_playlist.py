@@ -104,7 +104,10 @@ def exchange_code(code: str, target_origin: str, code_verifier: str) -> dict:
             "code_verifier": code_verifier,
         },
     )
-    token_resp.raise_for_status()
+    if not token_resp.ok:
+        raise RuntimeError(
+            f"Beatport token exchange failed: {token_resp.status_code} {token_resp.text}"
+        )
     token_data = token_resp.json()
 
     if "expires_at" not in token_data and "expires_in" in token_data:
