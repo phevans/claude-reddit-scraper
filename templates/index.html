@@ -728,6 +728,9 @@
             .then(r => r.json())
             .then(result => {
                 console.log('[Beatport] exchange result:', result);
+                if (result._debug) {
+                    console.log('[Beatport] exchange debug:', result._debug);
+                }
                 if (result.success) {
                     checkAuthStatus();
                 } else {
@@ -742,6 +745,7 @@
         fetch('/beatport/authorize-url')
             .then(r => r.json())
             .then(data => {
+                console.log('[Beatport] authorize-url debug:', data._debug);
                 console.log('[Beatport] opening popup:', data.url);
                 popup = window.open(data.url, 'beatport_auth', 'width=600,height=700');
 

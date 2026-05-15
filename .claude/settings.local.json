@@ -102,7 +102,12 @@
       "Bash(curl -s \"https://d28eojbfl0i6i1.cloudfront.net/\")",
       "Bash(grep -oP \"TokenBody.{0,800}\")",
       "Bash(grep -oP \"client_secret[^}]{0,200}\")",
-      "Bash(python -m pytest tests/test_app.py::TestScrape::test_scrape_streams_sections -x)"
+      "Bash(python -m pytest tests/test_app.py::TestScrape::test_scrape_streams_sections -x)",
+      "Bash(eb logs *)",
+      "Read(//private/tmp/**)",
+      "Bash(rm -rf eb_logs)",
+      "Bash(mkdir eb_logs)",
+      "Bash(unzip -q /Users/phil/Code/claude-reddit-scraper/.elasticbeanstalk/logs/260515_150938.zip -d eb_logs)"
     ]
   }
 }
