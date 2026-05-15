@@ -700,7 +700,9 @@
             if (popup) popup.close();
 
             if (event.data && event.data.error) {
-                alert('Beatport authorization error: ' + JSON.stringify(event.data.error));
+                const err = event.data.error;
+                const msg = err && (err.message || err.toString()) || JSON.stringify(err);
+                alert('Beatport authorization error: ' + msg);
                 return;
             }
 
