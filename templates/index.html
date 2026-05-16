@@ -715,7 +715,9 @@
         const BP_TOKEN = 'https://account.beatport.com/o/token/';
         const POST_MSG_URI = 'https://api.beatport.com/v4/auth/o/post-message/';
         const targetOrigin = window.location.origin;
-        const redirectUri = POST_MSG_URI + '?target=' + encodeURIComponent(targetOrigin);
+        // Don't URL-encode targetOrigin: Beatport decodes once when storing the
+        // redirect_uri, and the exchange comparison is exact-match.
+        const redirectUri = POST_MSG_URI + '?target=' + targetOrigin;
 
         let popup = null;
         let messageReceived = false;
@@ -756,9 +758,9 @@
                     code: code,
                     redirect_uri: redirectUri,
                     code_verifier: verifier,
+                    client_id: BP_CLIENT_ID,
                 });
-                // Beatport's /o/token/ requires HTTP Basic auth with the client_id
-                // (empty password since this is a public PKCE client).
+                console.log('[Beatport] token request body:', body.toString());
                 fetch(BP_TOKEN, {
                     method: 'POST',
                     headers: {
