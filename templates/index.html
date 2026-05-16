@@ -209,6 +209,23 @@
                         </div>
                     </div>
                     <div id="create-playlists-status" class="mt-2"></div>
+                    <div class="mt-2">
+                        <a href="#" onclick="document.getElementById('paste-token-row').style.display='block'; return false;" class="small text-muted">Paste Beatport token manually</a>
+                    </div>
+                    <div id="paste-token-row" style="display:none;" class="mt-2">
+                        <div class="row g-2 align-items-end">
+                            <div class="col">
+                                <label class="form-label small mb-1">Bearer token (paste from a Beatport API request's Authorization header)</label>
+                                <input type="text" id="paste-token-input" class="form-control form-control-sm" placeholder="eyJ0eXAiOiAi...">
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-sm btn-outline-primary" onclick="pasteBeatportToken()">Save Token</button>
+                            </div>
+                        </div>
+                        <small class="text-muted">
+                            To grab one: open beatport.com (logged in) → DevTools → Network → click any request to <code>api.beatport.com</code> → copy the part after "Bearer " in the Authorization request header.
+                        </small>
+                    </div>
                 </div>
             </div>
         </div>
@@ -704,6 +721,33 @@
         const digest = await crypto.subtle.digest('SHA-256', enc.encode(verifier));
         let s = btoa(String.fromCharCode.apply(null, new Uint8Array(digest)));
         return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    function pasteBeatportToken() {
+        const input = document.getElementById('paste-token-input');
+        const token = (input.value || '').trim();
+        if (!token) {
+            alert('Paste a token first');
+            return;
+        }
+        // Accept either a raw bearer token or a full "Bearer ..." string
+        const access = token.replace(/^Bearer\s+/i, '');
+        fetch('/beatport/paste-token', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({access_token: access}),
+        })
+        .then(r => r.json())
+        .then(result => {
+            if (result.success) {
+                input.value = '';
+                document.getElementById('paste-token-row').style.display = 'none';
+                checkAuthStatus();
+            } else {
+                alert('Save failed: ' + (result.error || 'Unknown'));
+            }
+        })
+        .catch(err => alert('Error: ' + err));
     }
 
     function connectBeatport() {

@@ -410,6 +410,37 @@ def beatport_store_token():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/beatport/paste-token", methods=["POST"])
+def beatport_paste_token():
+    """Manually paste a Beatport access token (or refresh token) into the app.
+
+    Accepts JSON with at least one of:
+      - access_token: a Bearer token to use for API calls
+      - refresh_token: a token to use to obtain new access tokens
+    Optional fields: expires_in (seconds), expires_at (unix epoch), token_type, scope
+    """
+    import time as _time
+    import beatport_playlist as bp
+    data = request.get_json() or {}
+    if not data.get("access_token") and not data.get("refresh_token"):
+        return jsonify({"error": "Need access_token or refresh_token"}), 400
+    token_data = dict(data)
+    if "expires_at" not in token_data:
+        if "expires_in" in token_data:
+            token_data["expires_at"] = _time.time() + int(token_data["expires_in"])
+        elif token_data.get("access_token"):
+            # Default: assume Beatport's typical 10-minute access token
+            token_data["expires_at"] = _time.time() + 600
+        else:
+            token_data["expires_at"] = 0  # access token unknown; rely on refresh
+    token_data.setdefault("token_type", "Bearer")
+    try:
+        bp._save_token(token_data)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/beatport/exchange", methods=["POST"])
 def beatport_exchange():
     """Exchange a Beatport auth code (from postMessage popup) for tokens."""
