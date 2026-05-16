@@ -668,6 +668,13 @@
         installBookmarklet();
     });
 
+    // Re-check auth status whenever the user returns to this tab —
+    // the bookmarklet on beatport.com may have just sent us a token.
+    window.addEventListener('focus', checkAuthStatus);
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) checkAuthStatus();
+    });
+
     function installBookmarklet() {
         const link = document.getElementById('bp-bookmarklet');
         if (!link) return;
