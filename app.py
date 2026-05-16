@@ -410,7 +410,7 @@ def beatport_store_token():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/beatport/paste-token", methods=["POST"])
+@app.route("/beatport/paste-token", methods=["POST", "OPTIONS"])
 def beatport_paste_token():
     """Manually paste a Beatport access token (or refresh token) into the app.
 
@@ -418,12 +418,27 @@ def beatport_paste_token():
       - access_token: a Bearer token to use for API calls
       - refresh_token: a token to use to obtain new access tokens
     Optional fields: expires_in (seconds), expires_at (unix epoch), token_type, scope
+
+    CORS-enabled (allow Beatport origins) so a bookmarklet running on
+    beatport.com can POST directly.
     """
     import time as _time
     import beatport_playlist as bp
-    data = request.get_json() or {}
+
+    def _cors(resp):
+        origin = request.headers.get("Origin", "")
+        if origin in ("https://www.beatport.com", "https://account.beatport.com", "https://beatport.com"):
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    if request.method == "OPTIONS":
+        return _cors(jsonify({}))
+
+    data = request.get_json(silent=True) or {}
     if not data.get("access_token") and not data.get("refresh_token"):
-        return jsonify({"error": "Need access_token or refresh_token"}), 400
+        return _cors(jsonify({"error": "Need access_token or refresh_token"})), 400
     token_data = dict(data)
     if "expires_at" not in token_data:
         if "expires_in" in token_data:
@@ -436,9 +451,9 @@ def beatport_paste_token():
     token_data.setdefault("token_type", "Bearer")
     try:
         bp._save_token(token_data)
-        return jsonify({"success": True})
+        return _cors(jsonify({"success": True}))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _cors(jsonify({"error": str(e)})), 500
 
 
 @app.route("/beatport/exchange", methods=["POST"])

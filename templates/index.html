@@ -222,8 +222,13 @@
                                 <button class="btn btn-sm btn-outline-primary" onclick="pasteBeatportToken()">Save Token</button>
                             </div>
                         </div>
-                        <small class="text-muted">
+                        <small class="text-muted d-block mb-2">
                             To grab one: open beatport.com (logged in) → DevTools → Network → click any request to <code>api.beatport.com</code> → copy the part after "Bearer " in the Authorization request header.
+                        </small>
+                        <small class="text-muted">
+                            Or use this one-click bookmarklet:
+                            <a id="bp-bookmarklet" href="#" class="badge bg-primary text-decoration-none">🎵 Grab Beatport Token</a>
+                            <span class="text-muted">— drag to your bookmarks bar, then click while on beatport.com (already logged in) and navigate to any page.</span>
                         </small>
                     </div>
                 </div>
@@ -660,7 +665,18 @@
     // appear immediately, without waiting for a scrape to finish.
     document.addEventListener('DOMContentLoaded', function() {
         checkAuthStatus();
+        installBookmarklet();
     });
+
+    function installBookmarklet() {
+        const link = document.getElementById('bp-bookmarklet');
+        if (!link) return;
+        const app = window.location.origin;
+        // Bookmarklet: hooks fetch + XHR, captures the first Bearer token
+        // sent to api.beatport.com, POSTs it to our app.
+        const code = `(function(){var APP=${JSON.stringify(app)};var captured=false;function send(t){if(captured)return;captured=true;fetch(APP+'/beatport/paste-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:t})}).then(function(r){return r.json()}).then(function(j){alert(j.success?'Token sent to scraper!':'Send failed: '+(j.error||'?'))}).catch(function(e){alert('Send error: '+e)})}var of=window.fetch;window.fetch=function(i,n){try{var u=typeof i==='string'?i:(i&&i.url)||'';if(/api\\.beatport\\.com/i.test(u)){var h=(n&&n.headers)||{};var a=null;if(h instanceof Headers)a=h.get('authorization')||h.get('Authorization');else for(var k in h)if(k.toLowerCase()==='authorization')a=h[k];if(a&&/^Bearer /i.test(a))send(a.replace(/^Bearer /i,''))}}catch(e){}return of.apply(this,arguments)};var ox=XMLHttpRequest.prototype.setRequestHeader;XMLHttpRequest.prototype.setRequestHeader=function(n,v){try{if(n&&n.toLowerCase()==='authorization'&&/^Bearer /i.test(v))send(v.replace(/^Bearer /i,''))}catch(e){}return ox.apply(this,arguments)};alert('Token catcher armed. Click any link on Beatport to trigger a request.')})();`;
+        link.href = 'javascript:' + encodeURIComponent(code);
+    }
 
     function checkAuthStatus() {
         const spBadge = document.getElementById('spotify-auth-status');

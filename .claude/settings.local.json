@@ -126,7 +126,10 @@
       "Bash(curl -s -X POST https://api.beatport.com/auth/o/token/ -u eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1: -d 'grant_type=authorization_code&code=test&redirect_uri=https%3A%2F%2Fapi.beatport.com%2Fauth%2Fo%2Fpost-message%2F&code_verifier=test')",
       "Bash(curl -s -X OPTIONS https://account.beatport.com/o/token/ -H 'Origin: https://d28eojbfl0i6i1.cloudfront.net' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: Content-Type,Authorization' -D -)",
       "Bash(grep -oE \"localStorage\\\\.\\(get|set\\)Item\\\\\\([^\\)]{0,80}\\\\\\)\")",
-      "Bash(grep -oP \".{0,150}localStorage\\\\.setItem\\\\\\(\\\\\"authorized\\\\\".{0,300}\")"
+      "Bash(grep -oP \".{0,150}localStorage\\\\.setItem\\\\\\(\\\\\"authorized\\\\\".{0,300}\")",
+      "Bash(curl -s \"https://www.beatport.com\" -H \"User-Agent: Mozilla/5.0\" -o /tmp/bp.html -w \"%{http_code}\\\\n\")",
+      "Bash(grep -oP \"\\(localStorage|sessionStorage|cookie\\)\\\\.[a-zA-Z]+\\\\\\([^\\)]{0,80}\\\\\\)\")",
+      "Bash(curl -s \"https://www.beatport.com\" -H \"User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36\")"
     ]
   }
 }
