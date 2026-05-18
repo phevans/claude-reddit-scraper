@@ -209,27 +209,21 @@
                         </div>
                     </div>
                     <div id="create-playlists-status" class="mt-2"></div>
-                    <div class="mt-2">
-                        <a href="#" onclick="document.getElementById('paste-token-row').style.display='block'; return false;" class="small text-muted">Paste Beatport token manually</a>
-                    </div>
-                    <div id="paste-token-row" style="display:none;" class="mt-2">
+                    <div id="bp-login-row" style="display:none;" class="mt-3 p-2 border rounded">
                         <div class="row g-2 align-items-end">
-                            <div class="col">
-                                <label class="form-label small mb-1">Bearer token (paste from a Beatport API request's Authorization header)</label>
-                                <input type="text" id="paste-token-input" class="form-control form-control-sm" placeholder="eyJ0eXAiOiAi...">
+                            <div class="col-auto">
+                                <label class="form-label small mb-1">Beatport username</label>
+                                <input type="text" id="bp-username" class="form-control form-control-sm" autocomplete="username">
                             </div>
                             <div class="col-auto">
-                                <button class="btn btn-sm btn-outline-primary" onclick="pasteBeatportToken()">Save Token</button>
+                                <label class="form-label small mb-1">Beatport password</label>
+                                <input type="password" id="bp-password" class="form-control form-control-sm" autocomplete="current-password">
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-sm btn-primary" onclick="beatportLogin()">Log in</button>
                             </div>
                         </div>
-                        <small class="text-muted d-block mb-2">
-                            To grab one: open beatport.com (logged in) → DevTools → Network → click any request to <code>api.beatport.com</code> → copy the part after "Bearer " in the Authorization request header.
-                        </small>
-                        <small class="text-muted">
-                            Or use this one-click bookmarklet:
-                            <a id="bp-bookmarklet" href="#" class="badge bg-primary text-decoration-none">🎵 Grab Beatport Token</a>
-                            <span class="text-muted">— drag to your bookmarks bar, then click while on beatport.com (already logged in) and navigate to any page.</span>
-                        </small>
+                        <small class="text-muted">Credentials are sent only to this server's session with Beatport's auth API. Not stored.</small>
                     </div>
                 </div>
             </div>
@@ -665,25 +659,12 @@
     // appear immediately, without waiting for a scrape to finish.
     document.addEventListener('DOMContentLoaded', function() {
         checkAuthStatus();
-        installBookmarklet();
     });
 
-    // Re-check auth status whenever the user returns to this tab —
-    // the bookmarklet on beatport.com may have just sent us a token.
     window.addEventListener('focus', checkAuthStatus);
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden) checkAuthStatus();
     });
-
-    function installBookmarklet() {
-        const link = document.getElementById('bp-bookmarklet');
-        if (!link) return;
-        const app = window.location.origin;
-        // Bookmarklet: hooks fetch + XHR, captures the first Bearer token
-        // sent to api.beatport.com, POSTs it to our app.
-        const code = `(function(){var APP=${JSON.stringify(app)};var captured=false;function send(t){if(captured)return;captured=true;fetch(APP+'/beatport/paste-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:t})}).then(function(r){return r.json()}).then(function(j){alert(j.success?'Token sent to scraper!':'Send failed: '+(j.error||'?'))}).catch(function(e){alert('Send error: '+e)})}var of=window.fetch;window.fetch=function(i,n){try{var u=typeof i==='string'?i:(i&&i.url)||'';if(/api\\.beatport\\.com/i.test(u)){var h=(n&&n.headers)||{};var a=null;if(h instanceof Headers)a=h.get('authorization')||h.get('Authorization');else for(var k in h)if(k.toLowerCase()==='authorization')a=h[k];if(a&&/^Bearer /i.test(a))send(a.replace(/^Bearer /i,''))}}catch(e){}return of.apply(this,arguments)};var ox=XMLHttpRequest.prototype.setRequestHeader;XMLHttpRequest.prototype.setRequestHeader=function(n,v){try{if(n&&n.toLowerCase()==='authorization'&&/^Bearer /i.test(v))send(v.replace(/^Bearer /i,''))}catch(e){}return ox.apply(this,arguments)};alert('Token catcher armed. Click any link on Beatport to trigger a request.')})();`;
-        link.href = 'javascript:' + encodeURIComponent(code);
-    }
 
     function checkAuthStatus() {
         const spBadge = document.getElementById('spotify-auth-status');
@@ -730,147 +711,34 @@
             .catch(err => alert('Failed to get Spotify authorize URL: ' + err));
     }
 
-    // Browser-side PKCE helpers ------------------------------------------
-    function bpRandomVerifier() {
-        // 64 random bytes → base64url (no padding) → ~86 chars, PKCE-legal
-        const bytes = new Uint8Array(64);
-        crypto.getRandomValues(bytes);
-        let s = btoa(String.fromCharCode.apply(null, bytes));
-        return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    function connectBeatport() {
+        document.getElementById('bp-login-row').style.display = 'block';
+        document.getElementById('bp-username').focus();
     }
 
-    async function bpChallenge(verifier) {
-        const enc = new TextEncoder();
-        const digest = await crypto.subtle.digest('SHA-256', enc.encode(verifier));
-        let s = btoa(String.fromCharCode.apply(null, new Uint8Array(digest)));
-        return s.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
-
-    function pasteBeatportToken() {
-        const input = document.getElementById('paste-token-input');
-        const token = (input.value || '').trim();
-        if (!token) {
-            alert('Paste a token first');
+    function beatportLogin() {
+        const username = (document.getElementById('bp-username').value || '').trim();
+        const password = document.getElementById('bp-password').value || '';
+        if (!username || !password) {
+            alert('Enter your Beatport username and password');
             return;
         }
-        // Accept either a raw bearer token or a full "Bearer ..." string
-        const access = token.replace(/^Bearer\s+/i, '');
-        fetch('/beatport/paste-token', {
+        fetch('/beatport/login', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({access_token: access}),
+            body: JSON.stringify({username: username, password: password}),
         })
         .then(r => r.json())
         .then(result => {
             if (result.success) {
-                input.value = '';
-                document.getElementById('paste-token-row').style.display = 'none';
+                document.getElementById('bp-password').value = '';
+                document.getElementById('bp-login-row').style.display = 'none';
                 checkAuthStatus();
             } else {
-                alert('Save failed: ' + (result.error || 'Unknown'));
+                alert('Beatport login failed: ' + (result.error || 'Unknown'));
             }
         })
-        .catch(err => alert('Error: ' + err));
-    }
-
-    function connectBeatport() {
-        // Do the full OAuth flow client-side: Beatport ties auth codes to
-        // the browser session that initiated authorize, so the token
-        // exchange must come from the browser too — not from our server.
-        const BP_CLIENT_ID = 'eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1';
-        const BP_AUTHORIZE = 'https://account.beatport.com/o/authorize/';
-        const BP_TOKEN = 'https://account.beatport.com/o/token/';
-        const POST_MSG_URI = 'https://api.beatport.com/v4/auth/o/post-message/';
-        const targetOrigin = window.location.origin;
-        // Don't URL-encode targetOrigin: Beatport decodes once when storing the
-        // redirect_uri, and the exchange comparison is exact-match.
-        const redirectUri = POST_MSG_URI + '?target=' + targetOrigin;
-
-        let popup = null;
-        let messageReceived = false;
-        const verifier = bpRandomVerifier();
-
-        bpChallenge(verifier).then(challenge => {
-            const params = new URLSearchParams({
-                response_type: 'code',
-                client_id: BP_CLIENT_ID,
-                redirect_uri: redirectUri,
-                code_challenge: challenge,
-                code_challenge_method: 'S256',
-            });
-            const url = BP_AUTHORIZE + '?' + params.toString();
-            console.log('[Beatport] opening popup:', url);
-
-            function handler(event) {
-                console.log('[Beatport] message from', event.origin, event.data);
-                if (event.origin !== 'https://account.beatport.com' && event.origin !== 'https://api.beatport.com') return;
-                messageReceived = true;
-                window.removeEventListener('message', handler);
-                if (popup) popup.close();
-
-                if (event.data && event.data.error) {
-                    const err = event.data.error;
-                    alert('Beatport auth error: ' + (err && (err.message || err.toString()) || JSON.stringify(err)));
-                    return;
-                }
-                const code = event.data && event.data.code;
-                if (!code) {
-                    alert('Beatport auth failed: no code. ' + JSON.stringify(event.data));
-                    return;
-                }
-
-                // Exchange the code directly with Beatport, then send the tokens to our backend.
-                const body = new URLSearchParams({
-                    grant_type: 'authorization_code',
-                    code: code,
-                    redirect_uri: redirectUri,
-                    code_verifier: verifier,
-                    client_id: BP_CLIENT_ID,
-                });
-                console.log('[Beatport] token request body:', body.toString());
-                fetch(BP_TOKEN, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'Authorization': 'Basic ' + btoa(BP_CLIENT_ID + ':'),
-                    },
-                    body: body.toString(),
-                })
-                .then(r => r.json())
-                .then(tok => {
-                    console.log('[Beatport] token response:', tok);
-                    if (tok.error) {
-                        alert('Beatport token exchange failed: ' + tok.error + ' - ' + (tok.description || tok.error_description || ''));
-                        return;
-                    }
-                    // Hand off tokens to our server to store
-                    return fetch('/beatport/store-token', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify(tok),
-                    }).then(r => r.json()).then(result => {
-                        if (result.success) {
-                            checkAuthStatus();
-                        } else {
-                            alert('Beatport token storage failed: ' + (result.error || 'Unknown'));
-                        }
-                    });
-                })
-                .catch(err => alert('Beatport token request error: ' + err));
-            }
-
-            window.addEventListener('message', handler);
-            popup = window.open(url, 'beatport_auth', 'width=600,height=700');
-
-            const watchdog = setInterval(() => {
-                if (messageReceived) { clearInterval(watchdog); return; }
-                if (popup && popup.closed) {
-                    clearInterval(watchdog);
-                    window.removeEventListener('message', handler);
-                    if (!messageReceived) console.warn('[Beatport] popup closed without sending message');
-                }
-            }, 500);
-        });
+        .catch(err => alert('Beatport login error: ' + err));
     }
 
     function collectSections() {

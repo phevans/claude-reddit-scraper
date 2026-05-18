@@ -2,17 +2,16 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, Response, jsonify, redirect, render_template, request, session, stream_with_context
+from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
 
 from beatport_client import scrape_beatport_track_names, verify_beatport_link
 from beatport_playlist import (
     add_tracks_to_playlist as beatport_add_tracks_to_playlist,
     create_playlist as beatport_create_playlist,
-    exchange_code as beatport_exchange_code,
-    get_authorize_url as beatport_get_authorize_url,
     get_my_playlists,
     get_track_ids,
     is_authenticated as beatport_is_authenticated,
+    login_with_password as beatport_login_with_password,
 )
 from parser import parse_releases
 from reddit_client import get_latest_nmm_post
@@ -30,7 +29,6 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-please-set-in-prod")
 
 MAX_WORKERS = 10
 PREFERRED_SERVICE_ORDER = ["Beatport", "Bandcamp", "Spotify"]
@@ -306,35 +304,6 @@ def auth_status():
     })
 
 
-@app.route("/debug/beatport-token")
-def debug_beatport_token():
-    """Temporary debug: show what's in the Beatport token file."""
-    import os as _os
-    import beatport_playlist as bp
-    info = {
-        "token_file_path": bp._TOKEN_FILE,
-        "token_file_exists": _os.path.exists(bp._TOKEN_FILE),
-        "is_authenticated": bp.is_authenticated(),
-    }
-    if info["token_file_exists"]:
-        try:
-            with open(bp._TOKEN_FILE) as f:
-                import json as _json
-                data = _json.load(f)
-            # Redact sensitive bits
-            info["token_keys"] = sorted(data.keys())
-            info["expires_at"] = data.get("expires_at")
-            info["token_type"] = data.get("token_type")
-            info["has_access_token"] = bool(data.get("access_token"))
-            info["has_refresh_token"] = bool(data.get("refresh_token"))
-            if "error" in data:
-                info["error"] = data.get("error")
-                info["description"] = data.get("description")
-        except Exception as e:
-            info["read_error"] = str(e)
-    return jsonify(info)
-
-
 @app.route("/spotify/authorize-url")
 def spotify_authorize_url():
     """Return the Spotify OAuth authorize URL for the popup flow."""
@@ -362,122 +331,19 @@ def spotify_callback():
     </script><p>Spotify connected! You can close this window.</p></body></html>"""
 
 
-def _target_origin():
-    """Build the origin URL (scheme://host) of our app, for the
-    Beatport post-message target."""
-    proto = request.headers.get("CloudFront-Forwarded-Proto",
-                                request.headers.get("X-Forwarded-Proto",
-                                                    request.scheme))
-    host = request.headers.get("Host", request.host)
-    return f"{proto}://{host}"
-
-
-@app.route("/beatport/authorize-url")
-def beatport_authorize_url():
-    """Return the Beatport OAuth authorize URL for the popup flow.
-
-    Stores the PKCE code_verifier in the session so /beatport/exchange
-    can use it.
-    """
-    target = _target_origin()
-    url, verifier = beatport_get_authorize_url(target)
-    session["beatport_pkce_verifier"] = verifier
-    import hashlib as _hl
-    vhash = _hl.sha1(verifier.encode()).hexdigest()[:8]
-    return jsonify({"url": url, "_debug": {"verifier_hash": vhash, "target": target}})
-
-
-@app.route("/beatport/store-token", methods=["POST"])
-def beatport_store_token():
-    """Receive a Beatport token (exchanged client-side) and persist it.
-
-    Beatport binds auth codes to the originating browser session, so
-    the token exchange has to happen in the user's browser. The
-    browser POSTs the resulting token here for server-side storage.
-    """
-    import time as _time
-    import beatport_playlist as bp
-    data = request.get_json()
-    if not data or "access_token" not in data:
-        return jsonify({"error": "Missing access_token in payload"}), 400
-    token_data = dict(data)
-    if "expires_at" not in token_data and "expires_in" in token_data:
-        token_data["expires_at"] = _time.time() + token_data["expires_in"]
+@app.route("/beatport/login", methods=["POST"])
+def beatport_login():
+    """Log in to Beatport with username + password (server-side OAuth)."""
+    data = request.get_json() or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    if not username or not password:
+        return jsonify({"error": "username and password are required"}), 400
     try:
-        bp._save_token(token_data)
+        beatport_login_with_password(username, password)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/beatport/paste-token", methods=["POST", "OPTIONS"])
-def beatport_paste_token():
-    """Manually paste a Beatport access token (or refresh token) into the app.
-
-    Accepts JSON with at least one of:
-      - access_token: a Bearer token to use for API calls
-      - refresh_token: a token to use to obtain new access tokens
-    Optional fields: expires_in (seconds), expires_at (unix epoch), token_type, scope
-
-    CORS-enabled (allow Beatport origins) so a bookmarklet running on
-    beatport.com can POST directly.
-    """
-    import time as _time
-    import beatport_playlist as bp
-
-    def _cors(resp):
-        origin = request.headers.get("Origin", "")
-        if origin in ("https://www.beatport.com", "https://account.beatport.com", "https://beatport.com"):
-            resp.headers["Access-Control-Allow-Origin"] = origin
-            resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        return resp
-
-    if request.method == "OPTIONS":
-        return _cors(jsonify({}))
-
-    data = request.get_json(silent=True) or {}
-    if not data.get("access_token") and not data.get("refresh_token"):
-        return _cors(jsonify({"error": "Need access_token or refresh_token"})), 400
-    token_data = dict(data)
-    if "expires_at" not in token_data:
-        if "expires_in" in token_data:
-            token_data["expires_at"] = _time.time() + int(token_data["expires_in"])
-        elif token_data.get("access_token"):
-            # Default: assume Beatport's typical 10-minute access token
-            token_data["expires_at"] = _time.time() + 600
-        else:
-            token_data["expires_at"] = 0  # access token unknown; rely on refresh
-    token_data.setdefault("token_type", "Bearer")
-    try:
-        bp._save_token(token_data)
-        return _cors(jsonify({"success": True}))
-    except Exception as e:
-        return _cors(jsonify({"error": str(e)})), 500
-
-
-@app.route("/beatport/exchange", methods=["POST"])
-def beatport_exchange():
-    """Exchange a Beatport auth code (from postMessage popup) for tokens."""
-    data = request.get_json()
-    code = data.get("code")
-    if not code:
-        return jsonify({"error": "Missing authorization code"}), 400
-    verifier = session.get("beatport_pkce_verifier")
-    if not verifier:
-        return jsonify({"error": "Missing PKCE verifier in session - retry login"}), 400
-    import hashlib as _hl
-    vhash = _hl.sha1(verifier.encode()).hexdigest()[:8]
-    target = _target_origin()
-    try:
-        beatport_exchange_code(code, target, verifier)
-        session.pop("beatport_pkce_verifier", None)
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({
-            "error": str(e),
-            "_debug": {"verifier_hash": vhash, "target": target, "code_prefix": code[:8]},
-        }), 500
 
 
 @app.route("/create-playlists", methods=["POST"])

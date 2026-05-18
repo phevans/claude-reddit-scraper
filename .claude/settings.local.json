@@ -129,7 +129,11 @@
       "Bash(grep -oP \".{0,150}localStorage\\\\.setItem\\\\\\(\\\\\"authorized\\\\\".{0,300}\")",
       "Bash(curl -s \"https://www.beatport.com\" -H \"User-Agent: Mozilla/5.0\" -o /tmp/bp.html -w \"%{http_code}\\\\n\")",
       "Bash(grep -oP \"\\(localStorage|sessionStorage|cookie\\)\\\\.[a-zA-Z]+\\\\\\([^\\)]{0,80}\\\\\\)\")",
-      "Bash(curl -s \"https://www.beatport.com\" -H \"User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36\")"
+      "Bash(curl -s \"https://www.beatport.com\" -H \"User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36\")",
+      "WebSearch",
+      "Bash(gh api *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(t['path']\\) for t in d.get\\('tree',[]\\)][:30]\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(t['path']\\) for t in d.get\\('tree',[]\\)]\")"
     ]
   }
 }

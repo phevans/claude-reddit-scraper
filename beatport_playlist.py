@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import os
 import re
-import secrets
 import time
 from typing import Optional
-from urllib.parse import quote as _url_quote
 
 import requests
 from dotenv import load_dotenv
@@ -17,9 +13,9 @@ load_dotenv()
 
 _BASE_URL = "https://api.beatport.com"
 _CLIENT_ID = "eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1"
-_ACCOUNT_BASE = "https://account.beatport.com"
-# Base post-message URI registered for this public client
-_POST_MESSAGE_URI = "https://api.beatport.com/v4/auth/o/post-message/"
+# This redirect_uri isn't actually used as a real redirect — we set
+# allow_redirects=False on authorize and pull the code from Location.
+_REDIRECT_URI = "https://api.beatport.com/auth/o/post-message/"
 _TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 
@@ -49,89 +45,82 @@ def _token_is_valid(token_data: dict) -> bool:
     return time.time() < (expires_at - _TOKEN_EXPIRY_BUFFER)
 
 
-def _build_redirect_uri(target_origin: str) -> str:
-    """The Beatport post-message page requires a ?target=ORIGIN query
-    string to know which origin to postMessage the auth code to."""
-    return f"{_POST_MESSAGE_URI}?target={target_origin}"
+def login_with_password(username: str, password: str) -> dict:
+    """Server-side OAuth flow using username + password.
 
-
-def _generate_pkce_verifier() -> str:
-    """Generate a PKCE code_verifier (43-128 chars, URL-safe)."""
-    return secrets.token_urlsafe(64)[:128]
-
-
-def _pkce_challenge(verifier: str) -> str:
-    """Compute the S256 PKCE code_challenge from a verifier."""
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-
-def get_authorize_url(target_origin: str) -> tuple[str, str]:
-    """Build the Beatport authorization URL via account.beatport.com.
-
-    Returns (url, code_verifier). The verifier must be stored and
-    passed back to exchange_code(). Beatport requires PKCE.
+    Logs in via /v4/auth/login/ to get a session cookie, hits the
+    authorize endpoint within that session to get an auth code from
+    the redirect Location, then exchanges the code for tokens. This
+    is how the beets-beatport4 plugin authorizes — no PKCE, no
+    client_secret, no browser interaction.
     """
-    verifier = _generate_pkce_verifier()
-    challenge = _pkce_challenge(verifier)
-    redirect_uri = _build_redirect_uri(target_origin)
-    params = {
-        "response_type": "code",
-        "client_id": _CLIENT_ID,
-        "redirect_uri": redirect_uri,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    qs = "&".join(f"{k}={_url_quote(str(v), safe='')}" for k, v in params.items())
-    return f"{_ACCOUNT_BASE}/o/authorize/?{qs}", verifier
-
-
-def exchange_code(code: str, target_origin: str, code_verifier: str) -> dict:
-    """Exchange an authorization code for access + refresh tokens.
-
-    The redirect_uri must exactly match what was sent to authorize,
-    including the ?target=ORIGIN query string. The code_verifier is
-    the PKCE verifier returned by get_authorize_url().
-    """
-    redirect_uri = _build_redirect_uri(target_origin)
-    token_resp = requests.post(
-        f"{_ACCOUNT_BASE}/o/token/",
-        data={
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-            "code_verifier": code_verifier,
-        },
-        auth=(_CLIENT_ID, ""),
-    )
-    if not token_resp.ok:
-        raise RuntimeError(
-            f"Beatport token exchange failed: {token_resp.status_code} {token_resp.text}"
+    with requests.Session() as s:
+        # 1. Log in to establish a session
+        resp = s.post(
+            f"{_BASE_URL}/v4/auth/login/",
+            json={"username": username, "password": password},
         )
-    token_data = token_resp.json()
+        resp.raise_for_status()
+        data = resp.json()
+        if "username" not in data or "email" not in data:
+            raise RuntimeError(f"Beatport login failed: {data}")
 
-    # Beatport sometimes returns HTTP 200 with an error body instead of a 4xx
-    if "error" in token_data or "access_token" not in token_data:
-        raise RuntimeError(
-            f"Beatport token exchange failed: {token_resp.status_code} {token_resp.text}"
+        # 2. Hit the authorize endpoint — the auth code arrives in the
+        # 302 redirect's Location header (we don't follow it).
+        resp = s.get(
+            f"{_BASE_URL}/v4/auth/o/authorize/",
+            params={
+                "response_type": "code",
+                "client_id": _CLIENT_ID,
+                "redirect_uri": _REDIRECT_URI,
+            },
+            allow_redirects=False,
         )
+        location = resp.headers.get("Location", "")
+        if not location:
+            raise RuntimeError(
+                f"Beatport authorize returned no Location header "
+                f"(status={resp.status_code}, body={resp.text[:200]})"
+            )
+        # The Location can be a relative path; parse_qs handles both.
+        from urllib.parse import urlparse, parse_qs
+        codes = parse_qs(urlparse(location).query).get("code")
+        if not codes:
+            raise RuntimeError(f"No code in authorize redirect: {location}")
+        code = codes[0]
 
-    if "expires_at" not in token_data and "expires_in" in token_data:
-        token_data["expires_at"] = time.time() + token_data["expires_in"]
+        # 3. Exchange the code for tokens. Beatport's /v4/auth/o/token/
+        # expects params in the URL query string (not the body).
+        resp = s.post(
+            f"{_BASE_URL}/v4/auth/o/token/",
+            params={
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": _REDIRECT_URI,
+                "client_id": _CLIENT_ID,
+            },
+        )
+        resp.raise_for_status()
+        token_data = resp.json()
+        if "error" in token_data or "access_token" not in token_data:
+            raise RuntimeError(f"Beatport token exchange failed: {token_data}")
 
-    _save_token(token_data)
-    return token_data
+        if "expires_at" not in token_data and "expires_in" in token_data:
+            token_data["expires_at"] = time.time() + token_data["expires_in"]
+
+        _save_token(token_data)
+        return token_data
 
 
 def _refresh_access_token(refresh_token: str) -> dict:
     """Use refresh token to obtain a new access token."""
     resp = requests.post(
-        f"{_ACCOUNT_BASE}/o/token/",
-        data={
+        f"{_BASE_URL}/v4/auth/o/token/",
+        params={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
+            "client_id": _CLIENT_ID,
         },
-        auth=(_CLIENT_ID, ""),
     )
     resp.raise_for_status()
     token_data = resp.json()
