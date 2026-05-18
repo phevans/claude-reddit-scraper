@@ -793,6 +793,30 @@
         return sections;
     }
 
+    function _renderSectionRow(s) {
+        let html = '<tr><td>' + escapeHtml(s.playlist_name) + '</td>';
+        if (s.beatport && s.beatport.success) {
+            html += '<td class="text-success">' + s.beatport.tracks_added + ' tracks</td>';
+        } else if (s.beatport) {
+            html += '<td class="text-danger">' + escapeHtml(s.beatport.error || 'Failed') + '</td>';
+        } else {
+            html += '<td>—</td>';
+        }
+        if (s.spotify && s.spotify.success) {
+            let cell = s.spotify.tracks_added + ' tracks';
+            if (s.spotify.playlist_url) {
+                cell = '<a href="' + escapeHtml(s.spotify.playlist_url) +
+                    '" target="_blank" rel="noopener">' + cell + '</a>';
+            }
+            html += '<td class="text-success">' + cell + '</td>';
+        } else if (s.spotify) {
+            html += '<td class="text-danger">' + escapeHtml(s.spotify.error || 'Failed') + '</td>';
+        } else {
+            html += '<td>—</td>';
+        }
+        return html + '</tr>';
+    }
+
     async function createPlaylists() {
         const btn = document.getElementById('create-playlists-btn');
         const status = document.getElementById('create-playlists-status');
@@ -806,7 +830,15 @@
 
         btn.disabled = true;
         btn.textContent = 'Creating...';
-        status.innerHTML = '<div class="text-muted">Creating ' + sections.length + ' playlists per service...</div>';
+        status.innerHTML =
+            '<div class="text-muted mb-2" id="cp-progress">Creating playlists (0/' + sections.length + ')...</div>' +
+            '<table class="table table-sm"><thead><tr><th>Playlist</th><th>Beatport</th><th>Spotify</th></tr></thead>' +
+            '<tbody id="cp-rows"></tbody></table>';
+        const progressEl = document.getElementById('cp-progress');
+        const rowsEl = document.getElementById('cp-rows');
+
+        let total = sections.length;
+        let done = 0;
 
         try {
             const resp = await fetch('/create-playlists', {
@@ -814,40 +846,51 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({prefix: prefix, sections: sections})
             });
-            const data = await resp.json();
+            if (!resp.ok || !resp.body) {
+                throw new Error('Server returned ' + resp.status);
+            }
 
-            let html = '<table class="table table-sm"><thead><tr>' +
-                '<th>Playlist</th><th>Beatport</th><th>Spotify</th></tr></thead><tbody>';
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+            while (true) {
+                const {value, done: streamDone} = await reader.read();
+                if (streamDone) break;
+                buf += decoder.decode(value, {stream: true});
 
-            data.forEach(s => {
-                html += '<tr><td>' + escapeHtml(s.playlist_name) + '</td>';
-
-                if (s.beatport && s.beatport.success) {
-                    html += '<td class="text-success">' + s.beatport.tracks_added + ' tracks</td>';
-                } else if (s.beatport) {
-                    html += '<td class="text-danger">' + escapeHtml(s.beatport.error || 'Failed') + '</td>';
-                } else {
-                    html += '<td>—</td>';
-                }
-
-                if (s.spotify && s.spotify.success) {
-                    let cell = s.spotify.tracks_added + ' tracks';
-                    if (s.spotify.playlist_url) {
-                        cell = '<a href="' + escapeHtml(s.spotify.playlist_url) +
-                            '" target="_blank" rel="noopener">' + cell + '</a>';
+                // Parse complete SSE events (separated by blank lines)
+                let idx;
+                while ((idx = buf.indexOf('\n\n')) !== -1) {
+                    const raw = buf.slice(0, idx);
+                    buf = buf.slice(idx + 2);
+                    let event = 'message';
+                    const dataLines = [];
+                    raw.split('\n').forEach(line => {
+                        if (line.startsWith('event: ')) event = line.slice(7);
+                        else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+                    });
+                    const data = dataLines.join('\n');
+                    if (event === 'total') {
+                        try { total = JSON.parse(data).total || total; } catch (e) {}
+                        progressEl.textContent = 'Creating playlists (0/' + total + ')...';
+                    } else if (event === 'section') {
+                        try {
+                            const s = JSON.parse(data);
+                            rowsEl.insertAdjacentHTML('beforeend', _renderSectionRow(s));
+                            done++;
+                            progressEl.textContent = 'Creating playlists (' + done + '/' + total + ')...';
+                        } catch (e) {}
+                    } else if (event === 'done') {
+                        progressEl.textContent = 'Done — ' + done + ' playlists created.';
+                        progressEl.classList.remove('text-muted');
+                        progressEl.classList.add('text-success');
+                    } else if (event === 'error') {
+                        progressEl.classList.remove('text-muted');
+                        progressEl.classList.add('text-danger');
+                        progressEl.textContent = 'Error: ' + data;
                     }
-                    html += '<td class="text-success">' + cell + '</td>';
-                } else if (s.spotify) {
-                    html += '<td class="text-danger">' + escapeHtml(s.spotify.error || 'Failed') + '</td>';
-                } else {
-                    html += '<td>—</td>';
                 }
-
-                html += '</tr>';
-            });
-
-            html += '</tbody></table>';
-            status.innerHTML = html;
+            }
         } catch (err) {
             status.innerHTML = '<div class="alert alert-danger">Error: ' + err + '</div>';
         }

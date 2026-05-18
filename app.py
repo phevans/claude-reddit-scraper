@@ -363,72 +363,86 @@ def beatport_login():
         return jsonify({"error": str(e)}), 500
 
 
+def _build_section_result(prefix: str, section: dict) -> dict:
+    """Create playlists for one section on both services. Long-running
+    per call (many sequential HTTP requests per release), so the
+    endpoint streams these one at a time via SSE."""
+    section_name = section.get("name", "Unknown")
+    playlist_name = f"{prefix} {section_name}"
+    releases = section.get("releases", [])
+    section_result = {"section": section_name, "playlist_name": playlist_name,
+                      "beatport": None, "spotify": None}
+
+    try:
+        if not beatport_is_authenticated():
+            section_result["beatport"] = {"success": False, "error": "Not authenticated"}
+        else:
+            bp_track_ids = []
+            for rel in releases:
+                beatport_url = rel.get("beatport_url", "")
+                if beatport_url:
+                    bp_track_ids.extend(get_track_ids(beatport_url))
+            if bp_track_ids:
+                bp_playlist = beatport_create_playlist(playlist_name)
+                beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
+                section_result["beatport"] = {"success": True, "tracks_added": len(bp_track_ids)}
+            else:
+                section_result["beatport"] = {"success": True, "tracks_added": 0}
+    except Exception as e:
+        section_result["beatport"] = {"success": False, "error": str(e)}
+
+    try:
+        if not spotify_is_authenticated():
+            section_result["spotify"] = {"success": False, "error": "Not authenticated"}
+        else:
+            sp_uris = []
+            for rel in releases:
+                spotify_url = rel.get("spotify_url", "")
+                if spotify_url:
+                    sp_uris.extend(spotify_resolve_track_uris(spotify_url))
+            if sp_uris:
+                sp_playlist = spotify_create_playlist(playlist_name)
+                spotify_add_tracks_to_playlist(sp_playlist["id"], sp_uris)
+                section_result["spotify"] = {
+                    "success": True,
+                    "tracks_added": len(sp_uris),
+                    "playlist_url": sp_playlist.get("url", ""),
+                }
+            else:
+                section_result["spotify"] = {"success": True, "tracks_added": 0}
+    except Exception as e:
+        section_result["spotify"] = {"success": False, "error": str(e)}
+
+    return section_result
+
+
 @app.route("/create-playlists", methods=["POST"])
 def create_playlists():
-    """Create per-subgenre playlists on Beatport and Spotify."""
+    """Stream per-section playlist results via SSE.
+
+    The previous JSON version timed out at CloudFront / gunicorn (~30s)
+    for any non-trivial scrape, which delivered an HTML error page that
+    the client tried to JSON-parse.
+    """
     data = request.get_json()
     prefix = data.get("prefix", "NMM")
     sections = data.get("sections", [])
 
-    results = []
-
-    for section in sections:
-        section_name = section.get("name", "Unknown")
-        playlist_name = f"{prefix} {section_name}"
-        releases = section.get("releases", [])
-        section_result = {"section": section_name, "playlist_name": playlist_name,
-                          "beatport": None, "spotify": None}
-
-        # Beatport
+    def generate():
         try:
-            if not beatport_is_authenticated():
-                section_result["beatport"] = {"success": False, "error": "Not authenticated"}
-            else:
-                bp_track_ids = []
-                for rel in releases:
-                    beatport_url = rel.get("beatport_url", "")
-                    if beatport_url:
-                        ids = get_track_ids(beatport_url)
-                        bp_track_ids.extend(ids)
-                if bp_track_ids:
-                    bp_playlist = beatport_create_playlist(playlist_name)
-                    beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
-                    section_result["beatport"] = {
-                        "success": True,
-                        "tracks_added": len(bp_track_ids),
-                    }
-                else:
-                    section_result["beatport"] = {"success": True, "tracks_added": 0}
+            yield _sse("total", {"total": len(sections)})
+            for section in sections:
+                result = _build_section_result(prefix, section)
+                yield _sse("section", result)
+            yield _sse("done", "")
         except Exception as e:
-            section_result["beatport"] = {"success": False, "error": str(e)}
+            yield _sse("error", str(e))
 
-        # Spotify
-        try:
-            if not spotify_is_authenticated():
-                section_result["spotify"] = {"success": False, "error": "Not authenticated"}
-            else:
-                sp_uris = []
-                for rel in releases:
-                    spotify_url = rel.get("spotify_url", "")
-                    if spotify_url:
-                        uris = spotify_resolve_track_uris(spotify_url)
-                        sp_uris.extend(uris)
-                if sp_uris:
-                    sp_playlist = spotify_create_playlist(playlist_name)
-                    spotify_add_tracks_to_playlist(sp_playlist["id"], sp_uris)
-                    section_result["spotify"] = {
-                        "success": True,
-                        "tracks_added": len(sp_uris),
-                        "playlist_url": sp_playlist.get("url", ""),
-                    }
-                else:
-                    section_result["spotify"] = {"success": True, "tracks_added": 0}
-        except Exception as e:
-            section_result["spotify"] = {"success": False, "error": str(e)}
-
-        results.append(section_result)
-
-    return jsonify(results)
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":
