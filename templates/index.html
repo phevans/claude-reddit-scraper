@@ -508,16 +508,7 @@
                     }
                 }
 
-                // Mark the link box as edited. Replaces any prior auto badge.
-                const oldAuto = contentDiv.querySelector('.link-auto-badge');
-                if (oldAuto) oldAuto.remove();
-                if (!contentDiv.querySelector('.link-edited-badge')) {
-                    const badge = document.createElement('span');
-                    badge.className = 'link-edited-badge';
-                    badge.title = 'Manually edited';
-                    badge.textContent = 'edited';
-                    contentDiv.insertBefore(badge, contentDiv.firstChild);
-                }
+                markLinkEdited(linkBox);
 
                 let oldScore = linkBox.querySelector('.link-match-score');
                 if (oldScore) oldScore.remove();
@@ -664,6 +655,22 @@
         }
 
         linkBox.dataset.service = 'Spotify';
+        markLinkEdited(linkBox);
+    }
+
+    function markLinkEdited(linkBox) {
+        const contentDiv = linkBox.querySelector('.link-box-content');
+        if (!contentDiv) return;
+        // A manual replacement supersedes any prior auto match.
+        const oldAuto = contentDiv.querySelector('.link-auto-badge');
+        if (oldAuto) oldAuto.remove();
+        if (!contentDiv.querySelector('.link-edited-badge')) {
+            const badge = document.createElement('span');
+            badge.className = 'link-edited-badge';
+            badge.title = 'Manually edited';
+            badge.textContent = 'edited';
+            contentDiv.insertBefore(badge, contentDiv.firstChild);
+        }
     }
 
     function escapeHtml(str) {
