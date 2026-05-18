@@ -12,14 +12,40 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _BASE_URL = "https://api.beatport.com"
-_CLIENT_ID = "eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1"
+_API_V4 = "https://api.beatport.com/v4"
 # This redirect_uri isn't actually used as a real redirect — we set
 # allow_redirects=False on authorize and pull the code from Location.
-_REDIRECT_URI = "https://api.beatport.com/auth/o/post-message/"
+_REDIRECT_URI = f"{_API_V4}/auth/o/post-message/"
 _TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 
 _RELEASE_URL_PATTERN = re.compile(r"beatport\.com/release/[^/]+/(\d+)")
+_SCRIPT_SRC_PATTERN = re.compile(r'src="([^"]*\.js)"')
+_CLIENT_ID_PATTERN = re.compile(r"API_CLIENT_ID:\s*'([^']+)'")
+
+_cached_client_id: Optional[str] = None
+
+
+def _fetch_client_id() -> str:
+    """Scrape the Beatport API client_id from the swagger-ui docs page,
+    matching the beets-beatport4 approach. The hardcoded client_id
+    rotates occasionally; scraping keeps us in sync.
+    """
+    global _cached_client_id
+    if _cached_client_id:
+        return _cached_client_id
+    html = requests.get(f"{_API_V4}/docs/", timeout=10).text
+    for path in _SCRIPT_SRC_PATTERN.findall(html):
+        url = f"{_BASE_URL}{path}" if path.startswith("/") else path
+        try:
+            js = requests.get(url, timeout=10).text
+        except requests.RequestException:
+            continue
+        m = _CLIENT_ID_PATTERN.search(js)
+        if m:
+            _cached_client_id = m.group(1)
+            return _cached_client_id
+    raise RuntimeError("Could not scrape Beatport API_CLIENT_ID from docs")
 
 
 def _load_cached_token() -> Optional[dict]:
@@ -54,10 +80,11 @@ def login_with_password(username: str, password: str) -> dict:
     is how the beets-beatport4 plugin authorizes — no PKCE, no
     client_secret, no browser interaction.
     """
+    client_id = _fetch_client_id()
     with requests.Session() as s:
         # 1. Log in to establish a session
         resp = s.post(
-            f"{_BASE_URL}/v4/auth/login/",
+            f"{_API_V4}/auth/login/",
             json={"username": username, "password": password},
         )
         resp.raise_for_status()
@@ -68,10 +95,10 @@ def login_with_password(username: str, password: str) -> dict:
         # 2. Hit the authorize endpoint — the auth code arrives in the
         # 302 redirect's Location header (we don't follow it).
         resp = s.get(
-            f"{_BASE_URL}/v4/auth/o/authorize/",
+            f"{_API_V4}/auth/o/authorize/",
             params={
                 "response_type": "code",
-                "client_id": _CLIENT_ID,
+                "client_id": client_id,
                 "redirect_uri": _REDIRECT_URI,
             },
             allow_redirects=False,
@@ -92,12 +119,12 @@ def login_with_password(username: str, password: str) -> dict:
         # 3. Exchange the code for tokens. Beatport's /v4/auth/o/token/
         # expects params in the URL query string (not the body).
         resp = s.post(
-            f"{_BASE_URL}/v4/auth/o/token/",
+            f"{_API_V4}/auth/o/token/",
             params={
                 "code": code,
                 "grant_type": "authorization_code",
                 "redirect_uri": _REDIRECT_URI,
-                "client_id": _CLIENT_ID,
+                "client_id": client_id,
             },
         )
         resp.raise_for_status()
@@ -115,11 +142,11 @@ def login_with_password(username: str, password: str) -> dict:
 def _refresh_access_token(refresh_token: str) -> dict:
     """Use refresh token to obtain a new access token."""
     resp = requests.post(
-        f"{_BASE_URL}/v4/auth/o/token/",
+        f"{_API_V4}/auth/o/token/",
         params={
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": _CLIENT_ID,
+            "client_id": _fetch_client_id(),
         },
     )
     resp.raise_for_status()
