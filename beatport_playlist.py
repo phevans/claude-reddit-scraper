@@ -213,18 +213,29 @@ def extract_release_id(beatport_url: str) -> Optional[int]:
     return None
 
 
-def get_track_ids(beatport_url: str) -> list[int]:
-    """Resolve a Beatport release URL to a list of track IDs."""
+def get_release_tracks(beatport_url: str) -> list[dict]:
+    """Resolve a Beatport release URL to a list of full track dicts via
+    the authenticated API. Returns [] for non-release URLs or when not
+    authenticated.
+
+    Each track has at least: id, name, mix_name, and artists (list of
+    {id, name, ...}).
+    """
     release_id = extract_release_id(beatport_url)
     if release_id is None:
         return []
-
-    resp = _api_request("GET", f"/v4/catalog/releases/{release_id}/tracks/")
+    try:
+        resp = _api_request("GET", f"/v4/catalog/releases/{release_id}/tracks/")
+    except RuntimeError:
+        return []
     data = resp.json()
-
-    # Handle paginated response (results key) or direct list
     tracks = data.get("results", data) if isinstance(data, dict) else data
-    return [t["id"] for t in tracks if "id" in t]
+    return tracks or []
+
+
+def get_track_ids(beatport_url: str) -> list[int]:
+    """Resolve a Beatport release URL to a list of track IDs."""
+    return [t["id"] for t in get_release_tracks(beatport_url) if "id" in t]
 
 
 def create_playlist(name: str) -> dict:

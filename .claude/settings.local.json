@@ -135,7 +135,9 @@
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(t['path']\\) for t in d.get\\('tree',[]\\)][:30]\")",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); [print\\(t['path']\\) for t in d.get\\('tree',[]\\)]\")",
       "Bash(curl -sv \"https://api.beatport.com/v4/auth/o/authorize/?response_type=code&client_id=eHToND3lsv1Xdpa645DdF4wwBUceBniuKPT2dUB1&redirect_uri=https%3A%2F%2Fapi.beatport.com%2Fauth%2Fo%2Fpost-message%2F\")",
-      "Bash(curl -s \"https://api.beatport.com/v4/docs/\" -o /tmp/docs.html -w \"%{http_code}\\\\n\")"
+      "Bash(curl -s \"https://api.beatport.com/v4/docs/\" -o /tmp/docs.html -w \"%{http_code}\\\\n\")",
+      "Bash(curl -s \"https://www.beatport.com/release/pioneers-five/6813484\" -H \"User-Agent: Mozilla/5.0 \\(compatible; dnb-scraper/1.0\\)\" -o /tmp/bp.html -w \"%{http_code} bytes=%{size_download}\\\\n\")",
+      "Bash(python3)"
     ]
   }
 }

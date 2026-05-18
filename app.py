@@ -9,6 +9,7 @@ from beatport_playlist import (
     add_tracks_to_playlist as beatport_add_tracks_to_playlist,
     create_playlist as beatport_create_playlist,
     get_my_playlists,
+    get_release_tracks as beatport_get_release_tracks,
     get_track_ids,
     is_authenticated as beatport_is_authenticated,
     login_with_password as beatport_login_with_password,
@@ -205,12 +206,12 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
             return best, best_rejected
         _track_rejected(best)
 
-    # Step 3: if beatport URL provided, scrape first track and retry. For
+    # Step 3: if beatport URL provided, look up first track and retry. For
     # compilations the release "artist" is generic ("Various Artists",
     # "VA") and confuses Spotify, so use the first track's actual artist
     # when one is available.
     if beatport_url:
-        tracks = scrape_beatport_tracks(beatport_url)
+        tracks = _beatport_first_tracks(beatport_url)
         if tracks:
             first = tracks[0]
             search_artist = artist
@@ -250,6 +251,50 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
 def _is_various_artists(artist: str) -> bool:
     a = (artist or "").strip().lower()
     return a in {"various artists", "various", "va", "v/a", "v.a."}
+
+
+_MIX_TAIL_PATTERN = __import__("re").compile(
+    r"\s*[\(\[\-]\s*(original|extended|radio|club|dub|instrumental|vip|vocal)\s*(mix|edit|version)?\s*[\)\]]?\s*$",
+    __import__("re").IGNORECASE,
+)
+
+
+def _strip_mix_name(name: str) -> str:
+    """Remove trailing '(Original Mix)', '[Extended Mix]', '- Radio Edit' etc.
+
+    Beatport pads track titles with the mix variant which is not in the
+    Spotify catalog title, so it tanks search scores.
+    """
+    cleaned = _MIX_TAIL_PATTERN.sub("", name or "").strip()
+    return cleaned or name
+
+
+def _beatport_first_tracks(beatport_url: str) -> list[dict]:
+    """Return tracks for a Beatport release as [{name, artists}, ...].
+
+    Prefers the authenticated /v4 API (Cloudflare blocks public
+    scraping), with the page scraper as a fallback. The track 'name' is
+    the bare title — mix_name ('Original Mix', 'Extended Mix') is
+    intentionally dropped because it pollutes Spotify searches.
+    """
+    api_tracks = beatport_get_release_tracks(beatport_url)
+    if api_tracks:
+        out = []
+        for t in api_tracks:
+            name = _strip_mix_name((t.get("name") or "").strip())
+            if not name:
+                continue
+            artists = ", ".join(
+                a.get("name", "") for a in t.get("artists", []) if isinstance(a, dict)
+            )
+            out.append({"name": name, "artists": artists})
+        if out:
+            return out
+    # Fallback to HTML scraping (likely 403 from Cloudflare these days)
+    return [
+        {"name": _strip_mix_name(t["name"]), "artists": t.get("artists", "")}
+        for t in scrape_beatport_tracks(beatport_url)
+    ]
 
 
 @app.route("/spotify/search", methods=["POST"])
