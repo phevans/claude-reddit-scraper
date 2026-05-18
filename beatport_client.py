@@ -25,14 +25,32 @@ def _parse_title_from_og(soup: BeautifulSoup) -> str | None:
     return title_part
 
 
-def _parse_tracks_from_soup(soup: BeautifulSoup) -> list[str]:
+def _parse_tracks_from_soup(soup: BeautifulSoup) -> list[dict]:
+    """Return [{name, artists}, ...] for each track on a release page."""
     tracks = []
-    for span in soup.select("span.buk-track-primary-title"):
-        name = span.get_text(strip=True)
-        if name:
-            tracks.append(name)
+    for row in soup.select("li.bucket-item"):
+        title_el = row.select_one("span.buk-track-primary-title")
+        if not title_el:
+            continue
+        name = title_el.get_text(strip=True)
+        if not name:
+            continue
+        artists_el = row.select_one("p.buk-track-artists")
+        artists = artists_el.get_text(strip=True) if artists_el else ""
+        tracks.append({"name": name, "artists": artists})
+
+    if not tracks:
+        # Fallback to parallel selectors when bucket-item structure differs
+        names = [s.get_text(strip=True) for s in soup.select("span.buk-track-primary-title")]
+        artists_lst = [p.get_text(strip=True) for p in soup.select("p.buk-track-artists")]
+        for i, name in enumerate(names):
+            if not name:
+                continue
+            tracks.append({"name": name, "artists": artists_lst[i] if i < len(artists_lst) else ""})
+
     if tracks:
         return tracks
+
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             import json
@@ -40,15 +58,23 @@ def _parse_tracks_from_soup(soup: BeautifulSoup) -> list[str]:
             if isinstance(ld, dict) and "track" in ld:
                 for t in ld["track"]:
                     name = t.get("name", "")
-                    if name:
-                        tracks.append(name)
+                    if not name:
+                        continue
+                    by = t.get("byArtist") or []
+                    if isinstance(by, dict):
+                        by = [by]
+                    artist_names = [a.get("name", "") for a in by if isinstance(a, dict)]
+                    tracks.append({"name": name, "artists": ", ".join(filter(None, artist_names))})
         except (json.JSONDecodeError, TypeError, KeyError):
             pass
     return tracks
 
 
-def _fetch_beatport_page(url: str) -> tuple[str | None, list[str]]:
-    """Fetch a Beatport release page once, returning (title, track_names)."""
+def _fetch_beatport_page(url: str) -> tuple[str | None, list[dict]]:
+    """Fetch a Beatport release page once, returning (title, tracks).
+
+    tracks is a list of {name, artists} dicts.
+    """
     try:
         response = requests.get(
             url,
@@ -71,6 +97,12 @@ def _fetch_beatport_title(url: str) -> str | None:
 
 def scrape_beatport_track_names(url: str) -> list[str]:
     """Scrape track names from a Beatport release page."""
+    _, tracks = _fetch_beatport_page(url)
+    return [t["name"] for t in tracks]
+
+
+def scrape_beatport_tracks(url: str) -> list[dict]:
+    """Scrape tracks with name + artists from a Beatport release page."""
     _, tracks = _fetch_beatport_page(url)
     return tracks
 

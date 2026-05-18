@@ -111,6 +111,18 @@
             border-radius: 3px;
             line-height: 1.4;
         }
+        .link-edited-badge {
+            flex-shrink: 0;
+            font-size: 0.6rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: #fd7e14;
+            color: #fff;
+            padding: 1px 5px;
+            border-radius: 3px;
+            line-height: 1.4;
+        }
         .link-search-btn {
             flex-shrink: 0;
             background: none;
@@ -494,6 +506,17 @@
                         a.textContent = newUrl;
                         addLabel.replaceWith(a);
                     }
+                }
+
+                // Mark the link box as edited. Replaces any prior auto badge.
+                const oldAuto = contentDiv.querySelector('.link-auto-badge');
+                if (oldAuto) oldAuto.remove();
+                if (!contentDiv.querySelector('.link-edited-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'link-edited-badge';
+                    badge.title = 'Manually edited';
+                    badge.textContent = 'edited';
+                    contentDiv.insertBefore(badge, contentDiv.firstChild);
                 }
 
                 let oldScore = linkBox.querySelector('.link-match-score');

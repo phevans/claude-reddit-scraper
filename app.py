@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
 
-from beatport_client import scrape_beatport_track_names, verify_beatport_link
+from beatport_client import scrape_beatport_tracks, verify_beatport_link
 from beatport_playlist import (
     add_tracks_to_playlist as beatport_add_tracks_to_playlist,
     create_playlist as beatport_create_playlist,
@@ -205,15 +205,27 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
             return best, best_rejected
         _track_rejected(best)
 
-    # Step 3: if beatport URL provided, scrape first track name and retry
+    # Step 3: if beatport URL provided, scrape first track and retry. For
+    # compilations the release "artist" is generic ("Various Artists",
+    # "VA") and confuses Spotify, so use the first track's actual artist
+    # when one is available.
     if beatport_url:
-        track_names = scrape_beatport_track_names(beatport_url)
-        if track_names:
-            track_query = f"{artist} {track_names[0]}".strip()
+        tracks = scrape_beatport_tracks(beatport_url)
+        if tracks:
+            first = tracks[0]
+            search_artist = artist
+            if _is_various_artists(artist) and first.get("artists"):
+                search_artist = first["artists"]
+            track_query = f"{search_artist} {first['name']}".strip()
+            # Score candidates against the first track's real artist+title
+            # too — otherwise a "Various Artists" release will always
+            # score badly against the actual track artist.
+            score_against_artist = search_artist
+            score_against_title = first["name"]
 
             results = search_spotify(track_query, "album")
             if results:
-                best = _best_match(results, artist, title)
+                best = _best_match(results, score_against_artist, score_against_title)
                 if best and best["match"] >= threshold:
                     best["source"] = "beatport_track_album_search"
                     best["service"] = "Spotify"
@@ -222,7 +234,7 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
 
             results = search_spotify(track_query, "track")
             if results:
-                best = _best_match(results, artist, title)
+                best = _best_match(results, score_against_artist, score_against_title)
                 if best and best["match"] >= threshold:
                     if best.get("album_url"):
                         best["url"] = best["album_url"]
@@ -233,6 +245,11 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
                 _track_rejected(best)
 
     return None, best_rejected
+
+
+def _is_various_artists(artist: str) -> bool:
+    a = (artist or "").strip().lower()
+    return a in {"various artists", "various", "va", "v/a", "v.a."}
 
 
 @app.route("/spotify/search", methods=["POST"])
