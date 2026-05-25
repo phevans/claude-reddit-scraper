@@ -34,6 +34,7 @@ from spotify_playlist import (
     get_authorize_url as spotify_get_authorize_url,
     get_playlist as spotify_get_playlist,
     get_playlist_track_uris as spotify_get_playlist_track_uris,
+    get_tracks_info as spotify_get_tracks_info,
     is_authenticated as spotify_is_authenticated,
     replace_playlist_tracks as spotify_replace_playlist_tracks,
     resolve_track_uris as spotify_resolve_track_uris,
@@ -570,6 +571,172 @@ def _spotify_section_update(section_name: str, fallback_name: str,
         "old_backups_deleted": deleted_old_backups,
         "previous_track_count": len(old_uris),
     }
+
+
+def _build_section_plan(prefix: str, section: dict) -> dict:
+    """Read-only counterpart to _build_section_result. Returns what
+    WOULD happen on commit, without touching any playlist.
+    """
+    section_name = section.get("name", "Unknown")
+    playlist_name = f"{prefix} {section_name}"
+    releases = section.get("releases", [])
+    plan = {"section": section_name, "playlist_name": playlist_name,
+            "beatport": None, "spotify": None}
+
+    # Beatport plan is intentionally thin until the persistent-Beatport
+    # flow lands. For now it's "we would create a new playlist with N
+    # tracks" — same as today's commit behaviour.
+    try:
+        if not beatport_is_authenticated():
+            plan["beatport"] = {"success": False, "error": "Not authenticated"}
+        else:
+            bp_track_ids = []
+            for rel in releases:
+                beatport_url = rel.get("beatport_url", "")
+                if beatport_url:
+                    bp_track_ids.extend(get_track_ids(beatport_url))
+            plan["beatport"] = {
+                "success": True,
+                "would_create": playlist_name,
+                "track_count": len(bp_track_ids),
+            }
+    except Exception as e:
+        plan["beatport"] = {"success": False, "error": str(e)}
+
+    try:
+        if not spotify_is_authenticated():
+            plan["spotify"] = {"success": False, "error": "Not authenticated"}
+        else:
+            sp_uris = []
+            for rel in releases:
+                spotify_url = rel.get("spotify_url", "")
+                if spotify_url:
+                    sp_uris.extend(spotify_resolve_track_uris(spotify_url))
+            plan["spotify"] = _spotify_section_plan(
+                section_name, playlist_name, sp_uris,
+            )
+    except Exception as e:
+        plan["spotify"] = {"success": False, "error": str(e)}
+
+    return plan
+
+
+def _spotify_section_plan(section_name: str, fallback_name: str,
+                          new_uris: list[str]) -> dict:
+    """Diff the proposed new_uris against the persistent playlist's
+    current contents, without modifying anything. Mirrors the shape of
+    _spotify_section_update's return value so the UI can render the
+    same fields.
+
+    Track-level fields (`to_add`, `to_remove`) include name + artists
+    via spotify_get_tracks_info so the diff is reviewable at a glance.
+    Tracks Spotify can't resolve come back with name=None and the UI
+    renders them as "<unknown — spotify:track:xxxxx>".
+    """
+    if not new_uris:
+        return {"success": True, "tracks_added": 0,
+                "note": "No Spotify tracks found in this section."}
+
+    mapping = lookup_spotify_playlists(section_name)
+    if not mapping:
+        # Unmapped: would create a standalone playlist.
+        return {
+            "success": True,
+            "tracks_added": len(new_uris),
+            "unmapped": True,
+            "fallback_name": fallback_name,
+            "to_add": spotify_get_tracks_info(new_uris),
+            "to_remove": [],
+        }
+
+    persistent_id = spotify_extract_playlist_id(mapping["persistent"])
+    if not persistent_id:
+        return {"success": False,
+                "error": f"Could not parse persistent playlist URL: {mapping['persistent']}"}
+
+    persistent_meta = spotify_get_playlist(persistent_id)
+    persistent_name = persistent_meta.get("name") or fallback_name
+    backup_prefix = f"{persistent_name} backup "
+
+    old_uris = spotify_get_playlist_track_uris(persistent_id)
+    old_set = set(old_uris)
+    new_set = set(new_uris)
+
+    to_add_uris = [u for u in new_uris if u not in old_set]
+    to_remove_uris = [u for u in old_uris if u not in new_set]
+    unchanged_count = len(old_set & new_set)
+
+    # The double-click footgun: if the new set exactly matches the
+    # current persistent set, the commit would back up "this week's"
+    # data and replace it with the same data — losing last week's
+    # backup. Flag it so the UI can render a no-op warning.
+    no_op = (not to_add_uris and not to_remove_uris)
+
+    existing_backups = spotify_find_playlists_by_prefix(backup_prefix)
+    backup = None
+    if old_uris and not no_op:
+        # Note: we don't actually know the date that would be used at
+        # commit time (it'd be commit's "today"), so we don't put one
+        # in the planned name. The UI can describe it as "a new
+        # backup playlist".
+        backup = {
+            "track_count": len(old_uris),
+            "replaces": [p["name"] for p in existing_backups],
+        }
+
+    yearly_add_count = 0
+    if mapping.get("yearly") and not no_op:
+        yearly_id = spotify_extract_playlist_id(mapping["yearly"])
+        if yearly_id:
+            yearly_add_count = len(new_uris)
+
+    # Resolve names for the human review.
+    to_add = spotify_get_tracks_info(to_add_uris)
+    to_remove = spotify_get_tracks_info(to_remove_uris)
+
+    return {
+        "success": True,
+        "tracks_added": len(new_uris),
+        "playlist_url": mapping["persistent"],
+        "persistent_name": persistent_name,
+        "current_track_count": len(old_uris),
+        "new_track_count": len(new_uris),
+        "unchanged_count": unchanged_count,
+        "to_add": to_add,
+        "to_remove": to_remove,
+        "backup": backup,
+        "yearly_add_count": yearly_add_count,
+        "no_op": no_op,
+    }
+
+
+@app.route("/preview-playlists", methods=["POST"])
+def preview_playlists():
+    """Stream per-section diff previews via SSE.
+
+    Identical event protocol to /create-playlists so the frontend's
+    SSE plumbing is reused. The preview is purely informative — no
+    destructive Spotify calls are made here, only reads.
+    """
+    data = request.get_json()
+    prefix = data.get("prefix", "NMM")
+    sections = data.get("sections", [])
+
+    def generate():
+        try:
+            yield _sse("total", {"total": len(sections)})
+            for section in sections:
+                plan = _build_section_plan(prefix, section)
+                yield _sse("section", plan)
+            yield _sse("done", "")
+        except Exception as e:
+            yield _sse("error", str(e))
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.route("/create-playlists", methods=["POST"])

@@ -399,6 +399,42 @@ def delete_playlist(playlist_id: str) -> None:
     resp.raise_for_status()
 
 
+def get_tracks_info(track_uris: list[str]) -> list[dict]:
+    """Fetch (uri, name, artists) for each track URI.
+
+    Used by the preview flow: a list of URIs alone isn't reviewable —
+    the user needs to see what they're about to add or remove.
+    Batches at 50 per Spotify's documented cap.
+
+    Tracks that can't be resolved (deleted from catalogue, region-locked,
+    etc.) come back with name=None / artists=None so the UI can render
+    them as "<unknown — spotify:track:xxxxx>" rather than silently
+    disappearing from the diff.
+    """
+    by_uri: dict[str, dict] = {u: {"uri": u, "name": None, "artists": None}
+                               for u in track_uris}
+    # Pull track IDs from URIs; preserve URIs that aren't spotify:track:
+    # (e.g. spotify:local:) as unresolved entries.
+    ids = [u.split(":")[-1] for u in track_uris if u.startswith("spotify:track:")]
+    for i in range(0, len(ids), 50):
+        batch = ids[i:i + 50]
+        resp = _api_request("GET", "https://api.spotify.com/v1/tracks",
+                            params={"ids": ",".join(batch)})
+        resp.raise_for_status()
+        for t in resp.json().get("tracks", []) or []:
+            if not t:
+                continue
+            uri = t.get("uri")
+            if not uri or uri not in by_uri:
+                continue
+            by_uri[uri]["name"] = t.get("name")
+            by_uri[uri]["artists"] = ", ".join(
+                a.get("name", "") for a in t.get("artists", []) if isinstance(a, dict)
+            )
+    # Preserve caller's order.
+    return [by_uri[u] for u in track_uris]
+
+
 def find_user_playlists_by_name_prefix(prefix: str) -> list[dict]:
     """List the authenticated user's playlists whose name starts with
     `prefix`. Paginates through /v1/me/playlists. Returns [{id, name}].

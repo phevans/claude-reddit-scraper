@@ -606,6 +606,251 @@ class TestMissingCanonicalSections:
         sections = [self._section("Hardcore")]
         assert _missing_canonical_sections(sections) == list(CANONICAL_KEYS)
 
+
+class TestSpotifySectionPlan:
+    """Read-only diff helper. Critical invariant: it must make NO
+    destructive Spotify calls. We assert this by patching every
+    destructive helper with a side_effect that raises if invoked.
+    """
+
+    DESTRUCTIVE = [
+        "spotify_create_playlist",
+        "spotify_add_tracks_to_playlist",
+        "spotify_replace_playlist_tracks",
+        "spotify_delete_playlist",
+    ]
+
+    def _patch_destructive_to_raise(self):
+        return [
+            patch(f"app.{name}",
+                  side_effect=AssertionError(f"{name} called from preview"))
+            for name in self.DESTRUCTIVE
+        ]
+
+    def _run_plan(self, *, mapping, persistent_meta, old_uris,
+                  existing_backups, new_uris, track_info=None):
+        """Build a plan with a controlled set of mocked-out reads."""
+        from app import _spotify_section_plan
+        patches = self._patch_destructive_to_raise() + [
+            patch("app.lookup_spotify_playlists", return_value=mapping),
+            patch("app.spotify_extract_playlist_id",
+                  side_effect=lambda u: "PERSIST" if "PERSIST" in u else "YEARLY"),
+            patch("app.spotify_get_playlist", return_value=persistent_meta),
+            patch("app.spotify_get_playlist_track_uris", return_value=old_uris),
+            patch("app.spotify_find_playlists_by_prefix",
+                  return_value=existing_backups),
+            patch("app.spotify_get_tracks_info",
+                  side_effect=lambda uris: [
+                      track_info.get(u, {"uri": u, "name": None, "artists": None})
+                      for u in uris
+                  ] if track_info else [
+                      {"uri": u, "name": None, "artists": None} for u in uris
+                  ]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            return _spotify_section_plan("Liquid", "NMM Liquid", new_uris)
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_normal_diff(self):
+        plan = self._run_plan(
+            mapping={"persistent": "url-PERSIST", "yearly": "url-YEARLY",
+                     "canonical_key": "liquid"},
+            persistent_meta={"id": "PERSIST", "name": "NMM Liquid",
+                             "url": "url-PERSIST"},
+            old_uris=["spotify:track:OLD1", "spotify:track:KEEP1",
+                      "spotify:track:OLD2"],
+            existing_backups=[{"id": "OLDBACKUP",
+                               "name": "NMM Liquid backup 2026-05-18"}],
+            new_uris=["spotify:track:KEEP1", "spotify:track:NEW1",
+                      "spotify:track:NEW2"],
+            track_info={
+                "spotify:track:NEW1": {"uri": "spotify:track:NEW1",
+                                       "name": "New One", "artists": "Artist A"},
+                "spotify:track:OLD1": {"uri": "spotify:track:OLD1",
+                                       "name": "Old One", "artists": "Artist B"},
+            },
+        )
+        assert plan["success"] is True
+        assert plan["current_track_count"] == 3
+        assert plan["new_track_count"] == 3
+        assert plan["unchanged_count"] == 1  # KEEP1
+        # Order is preserved from new_uris / old_uris.
+        assert [t["uri"] for t in plan["to_add"]] == [
+            "spotify:track:NEW1", "spotify:track:NEW2",
+        ]
+        assert [t["uri"] for t in plan["to_remove"]] == [
+            "spotify:track:OLD1", "spotify:track:OLD2",
+        ]
+        # Backup info includes what would be deleted afterward.
+        assert plan["backup"]["track_count"] == 3
+        assert plan["backup"]["replaces"] == ["NMM Liquid backup 2026-05-18"]
+        # Yearly is non-zero because mapping has yearly URL.
+        assert plan["yearly_add_count"] == 3
+        assert plan["no_op"] is False
+
+    def test_no_op_when_new_matches_old_exactly(self):
+        """The double-click safety net: identical contents → no_op flag.
+        Backup field is None so the UI can render "no changes — backup
+        will be skipped".
+        """
+        uris = ["spotify:track:A", "spotify:track:B"]
+        plan = self._run_plan(
+            mapping={"persistent": "url-PERSIST", "yearly": "url-YEARLY",
+                     "canonical_key": "liquid"},
+            persistent_meta={"id": "PERSIST", "name": "NMM Liquid"},
+            old_uris=uris,
+            existing_backups=[],
+            new_uris=uris,
+        )
+        assert plan["no_op"] is True
+        assert plan["to_add"] == []
+        assert plan["to_remove"] == []
+        assert plan["unchanged_count"] == 2
+        # No backup would be made — guards against destroying the
+        # previous-week backup on accidental re-runs.
+        assert plan["backup"] is None
+        # Yearly is also skipped in a no-op (no point appending what's
+        # already there).
+        assert plan["yearly_add_count"] == 0
+
+    def test_empty_persistent_no_backup_planned(self):
+        plan = self._run_plan(
+            mapping={"persistent": "url-PERSIST", "yearly": "url-YEARLY",
+                     "canonical_key": "liquid"},
+            persistent_meta={"id": "PERSIST", "name": "NMM Liquid"},
+            old_uris=[],
+            existing_backups=[],
+            new_uris=["spotify:track:NEW"],
+        )
+        assert plan["to_remove"] == []
+        assert plan["to_add"][0]["uri"] == "spotify:track:NEW"
+        # No backup needed for an empty starting playlist.
+        assert plan["backup"] is None
+
+    def test_unmapped_section_falls_back_to_oneoff_plan(self):
+        from app import _spotify_section_plan
+        with patch("app.lookup_spotify_playlists", return_value=None), \
+             patch("app.spotify_get_tracks_info",
+                   side_effect=lambda uris: [
+                       {"uri": u, "name": "T", "artists": "A"} for u in uris
+                   ]):
+            plan = _spotify_section_plan("Hardcore", "NMM Hardcore",
+                                          ["spotify:track:X"])
+        assert plan["unmapped"] is True
+        assert plan["fallback_name"] == "NMM Hardcore"
+        assert len(plan["to_add"]) == 1
+        assert plan["to_remove"] == []
+
+    def test_empty_new_uris_is_a_no_op(self):
+        from app import _spotify_section_plan
+        plan = _spotify_section_plan("Liquid", "NMM Liquid", [])
+        # No new tracks → nothing destructive would happen. No diff
+        # built (avoids unnecessary API calls).
+        assert plan["tracks_added"] == 0
+        assert "to_add" not in plan
+
+
+class TestPreviewPlaylistsEndpoint:
+    """End-to-end SSE test that confirms /preview-playlists is purely
+    informative — patches every destructive Spotify call with an
+    AssertionError side_effect.
+    """
+
+    DESTRUCTIVE = [
+        "spotify_create_playlist",
+        "spotify_add_tracks_to_playlist",
+        "spotify_replace_playlist_tracks",
+        "spotify_delete_playlist",
+    ]
+
+    @pytest.fixture
+    def client(self):
+        from app import app
+        app.config["TESTING"] = True
+        with app.test_client() as c:
+            yield c
+
+    def _collect_sse(self, response):
+        events = []
+        current = None
+        data_lines = []
+        for line in response.data.decode().split("\n"):
+            if line.startswith("event: "):
+                current = line[7:]
+            elif line.startswith("data: "):
+                data_lines.append(line[6:])
+            elif line == "" and current is not None:
+                events.append((current, "\n".join(data_lines)))
+                current = None
+                data_lines = []
+        return events
+
+    def test_preview_streams_per_section_without_destructive_calls(self, client):
+        # Patch every destructive helper to blow up if called.
+        destructive_patches = [
+            patch(f"app.{n}",
+                  side_effect=AssertionError(f"{n} called from preview"))
+            for n in self.DESTRUCTIVE
+        ]
+        # NOTE: stream_with_context defers body consumption until
+        # `resp.data` is accessed; both the request AND the body read
+        # must happen inside the patches' scope.
+        with patch("app.beatport_is_authenticated", return_value=False), \
+             patch("app.spotify_is_authenticated", return_value=True), \
+             patch("app.spotify_resolve_track_uris",
+                   side_effect=lambda url: ["spotify:track:NEW"]), \
+             patch("app.lookup_spotify_playlists",
+                   return_value={"persistent": "url-PERSIST",
+                                 "yearly": "url-YEARLY",
+                                 "canonical_key": "liquid"}), \
+             patch("app.spotify_extract_playlist_id", return_value="PERSIST"), \
+             patch("app.spotify_get_playlist",
+                   return_value={"id": "PERSIST", "name": "NMM Liquid"}), \
+             patch("app.spotify_get_playlist_track_uris",
+                   return_value=["spotify:track:OLD"]), \
+             patch("app.spotify_find_playlists_by_prefix", return_value=[]), \
+             patch("app.spotify_get_tracks_info",
+                   side_effect=lambda uris: [
+                       {"uri": u, "name": "x", "artists": "a"} for u in uris
+                   ]):
+            for p in destructive_patches:
+                p.start()
+            try:
+                resp = client.post("/preview-playlists", json={
+                    "prefix": "NMM",
+                    "sections": [{
+                        "name": "Liquid",
+                        "releases": [{"spotify_url": "https://open.spotify.com/album/X"}],
+                    }],
+                })
+                assert resp.status_code == 200
+                events = self._collect_sse(resp)
+            finally:
+                for p in destructive_patches:
+                    p.stop()
+        kinds = [k for k, _ in events]
+        assert "section" in kinds
+        assert "done" in kinds
+        import json as _json
+        section_payload = _json.loads(
+            next(d for k, d in events if k == "section")
+        )
+        # The plan includes diff fields, not commit result fields.
+        assert "to_add" in section_payload["spotify"]
+        assert "to_remove" in section_payload["spotify"]
+        # And the diff makes sense for our fixture.
+        assert [t["uri"] for t in section_payload["spotify"]["to_add"]] == [
+            "spotify:track:NEW",
+        ]
+        assert [t["uri"] for t in section_payload["spotify"]["to_remove"]] == [
+            "spotify:track:OLD",
+        ]
+
+
 class TestAlbumSanityCheck:
     """Step-3 cascade scores against the Beatport track, not the release
     title, so a same-track-different-album hit can sneak through. The

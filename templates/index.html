@@ -182,6 +182,7 @@
                 <div class="card-body">
                     <h5 class="card-title">Update Playlists</h5>
                     <p class="text-muted small mb-2">
+                        Preview shows the per-section diff: which tracks would be added, which removed, and what would happen to the backup &amp; yearly playlists. Nothing changes until you commit.
                         Spotify: writes the new tracks to the section's persistent playlist (clearing its current contents into a fresh dated backup, and deleting the previous backup) and appends them to the yearly playlist.
                         Beatport: still creates a new per-section playlist each run.
                         Sections without a persistent mapping fall back to a one-off playlist named with the prefix below.
@@ -196,8 +197,14 @@
                             <span id="spotify-auth-status" class="badge bg-secondary">Checking Spotify...</span>
                         </div>
                         <div class="col-auto">
-                            <button id="create-playlists-btn" class="btn btn-success" onclick="createPlaylists()" disabled>
-                                Update Playlists
+                            <button id="create-playlists-btn" class="btn btn-primary" onclick="previewPlaylists()" disabled>
+                                Preview update
+                            </button>
+                            <button id="commit-playlists-btn" class="btn btn-success ms-1" onclick="commitPlaylists()" style="display:none;" disabled>
+                                Commit
+                            </button>
+                            <button id="cancel-preview-btn" class="btn btn-outline-secondary ms-1" onclick="cancelPreview()" style="display:none;">
+                                Cancel
                             </button>
                         </div>
                     </div>
@@ -718,8 +725,82 @@
         return html + '</tr>';
     }
 
-    async function createPlaylists() {
-        const btn = document.getElementById('create-playlists-btn');
+    // -------- Three-state Update Playlists controller --------
+    //
+    // States:
+    //   1. idle     — "Preview update" enabled. Other buttons hidden.
+    //   2. previewing — preview SSE streaming. Commit/Cancel visible
+    //                   but Commit disabled until 'done' arrives.
+    //   3. committing — commit SSE streaming. Preview panel replaced
+    //                   by the results table. Commit/Cancel hidden.
+    //                   On done → idle.
+
+    function _setPlaylistState(state) {
+        const previewBtn = document.getElementById('create-playlists-btn');
+        const commitBtn = document.getElementById('commit-playlists-btn');
+        const cancelBtn = document.getElementById('cancel-preview-btn');
+
+        if (state === 'idle') {
+            previewBtn.disabled = false;
+            previewBtn.textContent = 'Preview update';
+            previewBtn.style.display = '';
+            commitBtn.style.display = 'none';
+            commitBtn.disabled = true;
+            cancelBtn.style.display = 'none';
+        } else if (state === 'previewing') {
+            previewBtn.disabled = true;
+            previewBtn.style.display = 'none';
+            commitBtn.style.display = '';
+            commitBtn.disabled = true;  // re-enabled when SSE 'done' arrives
+            cancelBtn.style.display = '';
+        } else if (state === 'preview_ready') {
+            commitBtn.disabled = false;
+        } else if (state === 'committing') {
+            previewBtn.disabled = true;
+            previewBtn.style.display = 'none';
+            commitBtn.disabled = true;
+            commitBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+        }
+    }
+
+    // Consume an SSE stream into a per-event callback dict. Returns
+    // when the stream ends. Used by both preview and commit flows.
+    async function _consumeSse(url, body, handlers) {
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok || !resp.body) {
+            throw new Error('Server returned ' + resp.status);
+        }
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+            const {value, done: streamDone} = await reader.read();
+            if (streamDone) break;
+            buf += decoder.decode(value, {stream: true});
+            let idx;
+            while ((idx = buf.indexOf('\n\n')) !== -1) {
+                const raw = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                let event = 'message';
+                const dataLines = [];
+                raw.split('\n').forEach(line => {
+                    if (line.startsWith('event: ')) event = line.slice(7);
+                    else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+                });
+                const data = dataLines.join('\n');
+                if (handlers[event]) handlers[event](data);
+            }
+        }
+    }
+
+    let _previewedSections = null;  // payload that was previewed — sent verbatim to commit
+
+    async function previewPlaylists() {
         const status = document.getElementById('create-playlists-status');
         const prefix = document.getElementById('new-playlist-name').value.trim() || 'NMM';
         const sections = collectSections();
@@ -729,76 +810,173 @@
             return;
         }
 
-        btn.disabled = true;
-        btn.textContent = 'Updating...';
+        _previewedSections = {prefix: prefix, sections: sections};
+        _setPlaylistState('previewing');
+
+        let total = sections.length;
+        let done = 0;
         status.innerHTML =
-            '<div class="text-muted mb-2" id="cp-progress">Updating playlists (0/' + sections.length + ')...</div>' +
+            '<div class="text-muted mb-2" id="cp-progress">Building preview (0/' + total + ')...</div>' +
+            '<div id="preview-cards"></div>';
+        const progressEl = document.getElementById('cp-progress');
+        const cardsEl = document.getElementById('preview-cards');
+
+        try {
+            await _consumeSse('/preview-playlists', _previewedSections, {
+                total: (d) => {
+                    try { total = JSON.parse(d).total || total; } catch (e) {}
+                    progressEl.textContent = 'Building preview (0/' + total + ')...';
+                },
+                section: (d) => {
+                    try {
+                        const s = JSON.parse(d);
+                        cardsEl.insertAdjacentHTML('beforeend', _renderPreviewCard(s));
+                        done++;
+                        progressEl.textContent = 'Building preview (' + done + '/' + total + ')...';
+                    } catch (e) {}
+                },
+                done: () => {
+                    progressEl.textContent = 'Preview ready — review and commit, or cancel.';
+                    _setPlaylistState('preview_ready');
+                },
+                error: (d) => {
+                    progressEl.classList.remove('text-muted');
+                    progressEl.classList.add('text-danger');
+                    progressEl.textContent = 'Error: ' + d;
+                    _setPlaylistState('idle');
+                },
+            });
+        } catch (err) {
+            status.innerHTML = '<div class="alert alert-danger">Error: ' + err + '</div>';
+            _setPlaylistState('idle');
+        }
+    }
+
+    function cancelPreview() {
+        _previewedSections = null;
+        document.getElementById('create-playlists-status').innerHTML = '';
+        _setPlaylistState('idle');
+    }
+
+    async function commitPlaylists() {
+        if (!_previewedSections) return;
+        const payload = _previewedSections;
+        const status = document.getElementById('create-playlists-status');
+
+        _setPlaylistState('committing');
+
+        let total = payload.sections.length;
+        let done = 0;
+        status.innerHTML =
+            '<div class="text-muted mb-2" id="cp-progress">Updating playlists (0/' + total + ')...</div>' +
             '<table class="table table-sm"><thead><tr><th>Section</th><th>Beatport</th><th>Spotify</th></tr></thead>' +
             '<tbody id="cp-rows"></tbody></table>';
         const progressEl = document.getElementById('cp-progress');
         const rowsEl = document.getElementById('cp-rows');
 
-        let total = sections.length;
-        let done = 0;
-
         try {
-            const resp = await fetch('/create-playlists', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({prefix: prefix, sections: sections})
+            await _consumeSse('/create-playlists', payload, {
+                total: (d) => {
+                    try { total = JSON.parse(d).total || total; } catch (e) {}
+                    progressEl.textContent = 'Updating playlists (0/' + total + ')...';
+                },
+                section: (d) => {
+                    try {
+                        const s = JSON.parse(d);
+                        rowsEl.insertAdjacentHTML('beforeend', _renderSectionRow(s));
+                        done++;
+                        progressEl.textContent = 'Updating playlists (' + done + '/' + total + ')...';
+                    } catch (e) {}
+                },
+                done: () => {
+                    progressEl.textContent = 'Done — ' + done + ' section' + (done === 1 ? '' : 's') + ' updated.';
+                    progressEl.classList.remove('text-muted');
+                    progressEl.classList.add('text-success');
+                },
+                error: (d) => {
+                    progressEl.classList.remove('text-muted');
+                    progressEl.classList.add('text-danger');
+                    progressEl.textContent = 'Error: ' + d;
+                },
             });
-            if (!resp.ok || !resp.body) {
-                throw new Error('Server returned ' + resp.status);
-            }
-
-            const reader = resp.body.getReader();
-            const decoder = new TextDecoder();
-            let buf = '';
-            while (true) {
-                const {value, done: streamDone} = await reader.read();
-                if (streamDone) break;
-                buf += decoder.decode(value, {stream: true});
-
-                let idx;
-                while ((idx = buf.indexOf('\n\n')) !== -1) {
-                    const raw = buf.slice(0, idx);
-                    buf = buf.slice(idx + 2);
-                    let event = 'message';
-                    const dataLines = [];
-                    raw.split('\n').forEach(line => {
-                        if (line.startsWith('event: ')) event = line.slice(7);
-                        else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
-                    });
-                    const data = dataLines.join('\n');
-                    if (event === 'total') {
-                        try { total = JSON.parse(data).total || total; } catch (e) {}
-                        progressEl.textContent = 'Updating playlists (0/' + total + ')...';
-                    } else if (event === 'section') {
-                        try {
-                            const s = JSON.parse(data);
-                            rowsEl.insertAdjacentHTML('beforeend', _renderSectionRow(s));
-                            done++;
-                            progressEl.textContent = 'Updating playlists (' + done + '/' + total + ')...';
-                        } catch (e) {}
-                    } else if (event === 'done') {
-                        progressEl.textContent = 'Done — ' + done + ' section' + (done === 1 ? '' : 's') + ' updated.';
-                        progressEl.classList.remove('text-muted');
-                        progressEl.classList.add('text-success');
-                    } else if (event === 'error') {
-                        progressEl.classList.remove('text-muted');
-                        progressEl.classList.add('text-danger');
-                        progressEl.textContent = 'Error: ' + data;
-                    }
-                }
-            }
         } catch (err) {
             status.innerHTML = '<div class="alert alert-danger">Error: ' + err + '</div>';
         }
 
-        btn.disabled = false;
-        btn.textContent = 'Update Playlists';
+        _previewedSections = null;
+        _setPlaylistState('idle');
     }
 
+    function _renderTrackLine(t) {
+        const label = t.name
+            ? escapeHtml(t.artists || '') + ' — ' + escapeHtml(t.name)
+            : '<span class="text-muted">&lt;unknown — ' + escapeHtml(t.uri) + '&gt;</span>';
+        return '<li>' + label + '</li>';
+    }
+
+    function _renderPreviewCard(s) {
+        const sp = s.spotify || {};
+        const bp = s.beatport || {};
+        const head = '<div class="card mb-3"><div class="card-body">' +
+            '<h6 class="card-title mb-2">' + escapeHtml(s.section) + '</h6>';
+
+        // Spotify summary
+        let spHtml = '<div class="mb-2"><strong>Spotify:</strong> ';
+        if (!sp.success) {
+            spHtml += '<span class="text-danger">' + escapeHtml(sp.error || 'Failed') + '</span>';
+        } else if (sp.tracks_added === 0) {
+            spHtml += '<span class="text-muted">' + escapeHtml(sp.note || 'No tracks') + '</span>';
+        } else if (sp.unmapped) {
+            spHtml += '<span class="text-warning">&#9888; No persistent mapping</span> — would create standalone playlist "' +
+                escapeHtml(sp.fallback_name) + '" with ' + sp.tracks_added + ' track' + (sp.tracks_added === 1 ? '' : 's') + '.';
+        } else if (sp.no_op) {
+            spHtml += '<span class="text-muted">No changes — proposed tracks exactly match the current ' +
+                sp.current_track_count + '. Commit would skip the backup.</span>';
+        } else {
+            const adds = (sp.to_add || []).length;
+            const rems = (sp.to_remove || []).length;
+            spHtml += '"' + escapeHtml(sp.persistent_name) + '" ' +
+                sp.current_track_count + ' &rarr; ' + sp.new_track_count + ' tracks ' +
+                '<span class="text-success">(+' + adds + ' add</span>, ' +
+                '<span class="text-danger">-' + rems + ' remove</span>, ' +
+                sp.unchanged_count + ' unchanged).';
+            if (sp.backup) {
+                spHtml += '<div class="small text-muted">Backup: new playlist with ' + sp.backup.track_count + ' track' +
+                    (sp.backup.track_count === 1 ? '' : 's');
+                if (sp.backup.replaces && sp.backup.replaces.length) {
+                    spHtml += '; will delete previous backup' +
+                        (sp.backup.replaces.length > 1 ? 's' : '') + ' (' +
+                        sp.backup.replaces.map(escapeHtml).join(', ') + ')';
+                }
+                spHtml += '.</div>';
+            }
+            if (sp.yearly_add_count) {
+                spHtml += '<div class="small text-muted">Yearly: +' + sp.yearly_add_count + ' tracks.</div>';
+            }
+            // Collapsible add/remove lists
+            if (adds) {
+                spHtml += '<details class="mt-2"><summary class="text-success">Tracks to add (' + adds + ')</summary>' +
+                    '<ul class="small mb-0">' + sp.to_add.map(_renderTrackLine).join('') + '</ul></details>';
+            }
+            if (rems) {
+                spHtml += '<details class="mt-1"><summary class="text-danger">Tracks to remove (' + rems + ')</summary>' +
+                    '<ul class="small mb-0">' + sp.to_remove.map(_renderTrackLine).join('') + '</ul></details>';
+            }
+        }
+        spHtml += '</div>';
+
+        // Beatport summary (still per-run-create, much simpler)
+        let bpHtml = '<div><strong>Beatport:</strong> ';
+        if (!bp.success) {
+            bpHtml += '<span class="text-danger">' + escapeHtml(bp.error || 'Failed') + '</span>';
+        } else {
+            bpHtml += 'Would create "' + escapeHtml(bp.would_create) + '" with ' + bp.track_count +
+                ' track' + (bp.track_count === 1 ? '' : 's') + '.';
+        }
+        bpHtml += '</div>';
+
+        return head + spHtml + bpHtml + '</div></div>';
+    }
 
     </script>
 </body>
