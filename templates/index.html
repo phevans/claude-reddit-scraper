@@ -177,37 +177,18 @@
 
         <div id="error-area"></div>
 
-        <div id="playlist-controls" class="mb-4" style="display: none;">
-            <div class="card">
-                <div class="card-body">
-                    <h5 class="card-title">Add to Beatport Playlist</h5>
-                    <div class="row align-items-end g-3">
-                        <div class="col-auto">
-                            <label for="playlist-select" class="form-label">Playlist</label>
-                            <select id="playlist-select" class="form-select">
-                                <option value="">Loading playlists...</option>
-                            </select>
-                        </div>
-                        <div class="col-auto">
-                            <button id="add-to-playlist-btn" class="btn btn-success" onclick="addToPlaylist()" disabled>
-                                Add Selected to Playlist
-                            </button>
-                        </div>
-                        <div class="col-auto">
-                            <span id="playlist-status" class="text-muted"></span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <div id="create-playlists-panel" class="mb-4">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">Create Playlists</h5>
+                    <h5 class="card-title">Update Playlists</h5>
+                    <p class="text-muted small mb-2">
+                        Spotify: writes the new tracks to the section's persistent playlist (clearing its current contents into a fresh dated backup, and deleting the previous backup) and appends them to the yearly playlist.
+                        Beatport: still creates a new per-section playlist each run.
+                        Sections without a persistent mapping fall back to a one-off playlist named with the prefix below.
+                    </p>
                     <div class="row align-items-end g-3">
                         <div class="col-auto">
-                            <label for="new-playlist-name" class="form-label">Playlist prefix</label>
+                            <label for="new-playlist-name" class="form-label">Fallback prefix <span class="text-muted">(unmapped sections only)</span></label>
                             <input type="text" id="new-playlist-name" class="form-control" value="NMM">
                         </div>
                         <div class="col-auto">
@@ -216,7 +197,7 @@
                         </div>
                         <div class="col-auto">
                             <button id="create-playlists-btn" class="btn btn-success" onclick="createPlaylists()" disabled>
-                                Create Playlists
+                                Update Playlists
                             </button>
                         </div>
                     </div>
@@ -280,6 +261,13 @@
             results.insertAdjacentHTML('beforeend', e.data);
         });
 
+        source.addEventListener('warning', function(e) {
+            const banner = document.createElement('div');
+            banner.className = 'alert alert-warning';
+            banner.textContent = e.data;
+            errorArea.appendChild(banner);
+        });
+
         source.addEventListener('done', function(e) {
             source.close();
             btn.disabled = false;
@@ -288,7 +276,6 @@
             progressBar.style.width = '100%';
             progressBar.textContent = 'Done';
             statusText.textContent = 'Complete!';
-            showPlaylistControls();
             showCreatePlaylistsPanel();
         });
 
@@ -307,128 +294,6 @@
             btn.disabled = false;
             btn.textContent = 'Run';
         };
-    }
-
-    function showPlaylistControls() {
-        const controls = document.getElementById('playlist-controls');
-        controls.style.display = 'block';
-        loadPlaylists();
-        initCheckboxHandlers();
-    }
-
-    function loadPlaylists() {
-        const select = document.getElementById('playlist-select');
-        fetch('/beatport/playlists')
-            .then(r => r.json())
-            .then(data => {
-                if (data.error) {
-                    select.innerHTML = '<option value="">Auth required — set BEATPORT credentials</option>';
-                    return;
-                }
-                select.innerHTML = '<option value="">Select a playlist...</option>';
-                data.forEach(p => {
-                    const opt = document.createElement('option');
-                    opt.value = p.id;
-                    opt.textContent = p.name;
-                    select.appendChild(opt);
-                });
-                updateAddButton();
-            })
-            .catch(() => {
-                select.innerHTML = '<option value="">Failed to load playlists</option>';
-            });
-    }
-
-    function initCheckboxHandlers() {
-        document.addEventListener('change', function(e) {
-            if (e.target.classList.contains('section-select-all')) {
-                const table = e.target.closest('table');
-                table.querySelectorAll('.release-checkbox').forEach(cb => {
-                    cb.checked = e.target.checked;
-                });
-            }
-            updateAddButton();
-        });
-    }
-
-    function updateAddButton() {
-        const btn = document.getElementById('add-to-playlist-btn');
-        const selected = document.querySelectorAll('.release-checkbox:checked').length;
-        const playlistId = document.getElementById('playlist-select').value;
-        btn.disabled = selected === 0 || !playlistId;
-        btn.textContent = selected > 0
-            ? 'Add ' + selected + ' Release' + (selected > 1 ? 's' : '') + ' to Playlist'
-            : 'Add Selected to Playlist';
-    }
-
-    async function addToPlaylist() {
-        const btn = document.getElementById('add-to-playlist-btn');
-        const status = document.getElementById('playlist-status');
-        const playlistId = document.getElementById('playlist-select').value;
-        const checked = document.querySelectorAll('.release-checkbox:checked');
-
-        if (!playlistId || checked.length === 0) return;
-
-        btn.disabled = true;
-        btn.textContent = 'Adding...';
-        status.textContent = '';
-
-        const urls = Array.from(checked).map(cb => cb.dataset.beatportUrl);
-        let allTrackIds = [];
-        let resolved = 0;
-
-        // Resolve each release URL to track IDs
-        for (const url of urls) {
-            resolved++;
-            status.textContent = 'Resolving tracks ' + resolved + '/' + urls.length + '...';
-            try {
-                const resp = await fetch('/beatport/resolve-tracks', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({beatport_url: url})
-                });
-                const data = await resp.json();
-                if (data.track_ids) {
-                    allTrackIds = allTrackIds.concat(data.track_ids);
-                }
-            } catch (err) {
-                status.textContent = 'Error resolving: ' + err;
-                btn.disabled = false;
-                updateAddButton();
-                return;
-            }
-        }
-
-        if (allTrackIds.length === 0) {
-            status.textContent = 'No tracks found for selected releases.';
-            btn.disabled = false;
-            updateAddButton();
-            return;
-        }
-
-        // Add all track IDs to playlist
-        status.textContent = 'Adding ' + allTrackIds.length + ' tracks to playlist...';
-        try {
-            const resp = await fetch('/beatport/add-tracks', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({playlist_id: playlistId, track_ids: allTrackIds})
-            });
-            const data = await resp.json();
-            if (data.error) {
-                status.textContent = 'Error: ' + data.error;
-            } else {
-                status.textContent = 'Added ' + allTrackIds.length + ' tracks successfully!';
-                status.classList.remove('text-muted');
-                status.classList.add('text-success');
-                checked.forEach(cb => { cb.checked = false; });
-            }
-        } catch (err) {
-            status.textContent = 'Error: ' + err;
-        }
-
-        btn.disabled = false;
-        updateAddButton();
     }
 
     function toggleEditLink(btn) {
@@ -589,6 +454,21 @@
                 return;
             }
 
+            // Step-3 cascade scores against the first Beatport track,
+            // not the release title — so a same-track / different-album
+            // hit can score high. The server returns album_title_match
+            // (release title vs. Spotify album title) when this path
+            // is taken. If it's low, warn loudly before they accept.
+            const ALBUM_WARN_THRESHOLD = 0.4;
+            const albumScore = data.album_title_match;
+            const releaseTitle = btn.closest('tr').dataset.releaseTitle || '';
+            const showWarning = (albumScore !== undefined && albumScore !== null && albumScore < ALBUM_WARN_THRESHOLD);
+            const warningHtml = showWarning
+                ? '<div class="mt-1 text-danger"><strong>⚠ Album title differs significantly</strong> — ' +
+                  '"' + escapeHtml(releaseTitle) + '" vs "' + escapeHtml(data.fetched_title) + '" ' +
+                  '(score: ' + albumScore.toFixed(2) + '). Likely a same-named track on an unrelated album — verify before accepting.</div>'
+                : '';
+
             const prompt = document.createElement('div');
             prompt.className = 'link-search-prompt';
             prompt.innerHTML =
@@ -597,9 +477,12 @@
                     '<div><strong>' + escapeHtml(data.artists || '') + ' — ' + escapeHtml(data.fetched_title) + '</strong></div>' +
                     '<div class="mt-1"><a href="' + escapeHtml(data.url) + '" target="_blank" rel="noopener">' + escapeHtml(data.url) + '</a></div>' +
                     (data.source ? '<div class="mt-1 text-muted">Found via: ' + escapeHtml(data.source.replace(/_/g, ' ')) + '</div>' : '') +
+                    warningHtml +
                 '</div>' +
                 '<div class="prompt-actions">' +
-                    '<button class="btn btn-sm btn-success prompt-accept">Use this</button>' +
+                    '<button class="btn btn-sm ' + (showWarning ? 'btn-warning' : 'btn-success') + ' prompt-accept">' +
+                        (showWarning ? 'Accept anyway' : 'Use this') +
+                    '</button>' +
                     '<button class="btn btn-sm btn-outline-secondary prompt-dismiss">Dismiss</button>' +
                 '</div>';
             linkBox.appendChild(prompt);
@@ -803,10 +686,28 @@
             html += '<td>—</td>';
         }
         if (s.spotify && s.spotify.success) {
-            let cell = s.spotify.tracks_added + ' tracks';
-            if (s.spotify.playlist_url) {
-                cell = '<a href="' + escapeHtml(s.spotify.playlist_url) +
-                    '" target="_blank" rel="noopener">' + cell + '</a>';
+            const sp = s.spotify;
+            let cell;
+            if (sp.tracks_added === 0) {
+                cell = '<span class="text-muted">' + escapeHtml(sp.note || 'No tracks') + '</span>';
+            } else {
+                let label = sp.tracks_added + ' tracks';
+                cell = sp.playlist_url
+                    ? '<a href="' + escapeHtml(sp.playlist_url) + '" target="_blank" rel="noopener">' + label + '</a>'
+                    : label;
+                if (sp.previous_track_count) {
+                    cell += ' <span class="text-muted">(replaced ' + sp.previous_track_count + ')</span>';
+                }
+                if (sp.backup_url) {
+                    cell += ' &middot; <a href="' + escapeHtml(sp.backup_url) +
+                        '" target="_blank" rel="noopener" class="text-muted small">backup</a>';
+                }
+                if (sp.yearly_added) {
+                    cell += '<div class="small text-muted">+' + sp.yearly_added + ' to yearly</div>';
+                }
+                if (sp.unmapped) {
+                    cell += '<div class="small text-warning">&#9888; No persistent mapping for this section &mdash; created a standalone playlist instead</div>';
+                }
             }
             html += '<td class="text-success">' + cell + '</td>';
         } else if (s.spotify) {
@@ -829,10 +730,10 @@
         }
 
         btn.disabled = true;
-        btn.textContent = 'Creating...';
+        btn.textContent = 'Updating...';
         status.innerHTML =
-            '<div class="text-muted mb-2" id="cp-progress">Creating playlists (0/' + sections.length + ')...</div>' +
-            '<table class="table table-sm"><thead><tr><th>Playlist</th><th>Beatport</th><th>Spotify</th></tr></thead>' +
+            '<div class="text-muted mb-2" id="cp-progress">Updating playlists (0/' + sections.length + ')...</div>' +
+            '<table class="table table-sm"><thead><tr><th>Section</th><th>Beatport</th><th>Spotify</th></tr></thead>' +
             '<tbody id="cp-rows"></tbody></table>';
         const progressEl = document.getElementById('cp-progress');
         const rowsEl = document.getElementById('cp-rows');
@@ -858,7 +759,6 @@
                 if (streamDone) break;
                 buf += decoder.decode(value, {stream: true});
 
-                // Parse complete SSE events (separated by blank lines)
                 let idx;
                 while ((idx = buf.indexOf('\n\n')) !== -1) {
                     const raw = buf.slice(0, idx);
@@ -872,16 +772,16 @@
                     const data = dataLines.join('\n');
                     if (event === 'total') {
                         try { total = JSON.parse(data).total || total; } catch (e) {}
-                        progressEl.textContent = 'Creating playlists (0/' + total + ')...';
+                        progressEl.textContent = 'Updating playlists (0/' + total + ')...';
                     } else if (event === 'section') {
                         try {
                             const s = JSON.parse(data);
                             rowsEl.insertAdjacentHTML('beforeend', _renderSectionRow(s));
                             done++;
-                            progressEl.textContent = 'Creating playlists (' + done + '/' + total + ')...';
+                            progressEl.textContent = 'Updating playlists (' + done + '/' + total + ')...';
                         } catch (e) {}
                     } else if (event === 'done') {
-                        progressEl.textContent = 'Done — ' + done + ' playlists created.';
+                        progressEl.textContent = 'Done — ' + done + ' section' + (done === 1 ? '' : 's') + ' updated.';
                         progressEl.classList.remove('text-muted');
                         progressEl.classList.add('text-success');
                     } else if (event === 'error') {
@@ -896,11 +796,10 @@
         }
 
         btn.disabled = false;
-        btn.textContent = 'Create Playlists';
+        btn.textContent = 'Update Playlists';
     }
 
-    // Update button state when playlist dropdown changes
-    document.getElementById('playlist-select').addEventListener('change', updateAddButton);
+
     </script>
 </body>
 </html>

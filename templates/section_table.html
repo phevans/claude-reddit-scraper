@@ -7,9 +7,6 @@
 <table class="table table-striped table-hover">
     <thead class="table-dark">
         <tr>
-            <th class="text-center" style="width: 40px;">
-                <input type="checkbox" class="form-check-input section-select-all" title="Select all">
-            </th>
             <th>Artists</th>
             <th>Title</th>
             <th>Label</th>
@@ -19,11 +16,6 @@
     <tbody>
         {% for release in section.releases %}
         <tr data-release-title="{{ release.title }}" data-release-artists="{{ release.artists }}" data-beatport-url="{{ release.links.get('Beatport', '') }}" data-spotify-url="{{ release.links.get('Spotify', '') }}">
-            <td class="text-center">
-                {% if "Beatport" in release.links %}
-                <input type="checkbox" class="form-check-input release-checkbox" data-beatport-url="{{ release.links['Beatport'] }}">
-                {% endif %}
-            </td>
             <td>{{ release.artists }}</td>
             <td>{{ release.title }}</td>
             <td>{{ release.label }}</td>

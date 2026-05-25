@@ -116,21 +116,70 @@ def is_authenticated() -> bool:
     return _get_user_token() is not None
 
 
+# Retry budget for transient failures (network errors, 5xx, 429). The
+# 401-refresh attempt is separate and doesn't consume this budget.
+_MAX_RETRIES = 3
+# Hard ceiling on a single sleep, even if Retry-After is enormous.
+_MAX_BACKOFF_SECONDS = 30
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential backoff: 1s, 2s, 4s, ... capped at _MAX_BACKOFF_SECONDS."""
+    return min(2 ** attempt, _MAX_BACKOFF_SECONDS)
+
+
 def _api_request(method: str, url: str, **kwargs) -> requests.Response:
-    """Make an authenticated request to the Spotify API with retry on 401."""
-    for attempt in range(2):
+    """Make an authenticated request to the Spotify API.
+
+    Handles three retry concerns:
+      - 401: refresh the cached token and retry once (free, not counted
+        against the transient-error budget).
+      - 429: honour Retry-After (capped at _MAX_BACKOFF_SECONDS).
+      - 5xx / connection errors: exponential backoff up to _MAX_RETRIES.
+
+    Real 4xx errors (other than 401/429) and exhausted retries return
+    the response as-is for the caller to `raise_for_status()` against.
+    """
+    refreshed_once = False
+    for attempt in range(_MAX_RETRIES + 1):
         token = _get_user_token()
         if not token:
             raise RuntimeError("Spotify user not authenticated")
-        response = requests.request(
-            method, url,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            **kwargs,
-        )
-        if response.status_code == 401 and attempt == 0:
-            _user_token_cache.clear()
+        try:
+            response = requests.request(
+                method, url,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                **kwargs,
+            )
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt >= _MAX_RETRIES:
+                raise
+            time.sleep(_backoff_seconds(attempt))
             continue
+
+        if response.status_code == 401 and not refreshed_once:
+            _user_token_cache.clear()
+            refreshed_once = True
+            # Don't count this against the retry budget — it's a token
+            # bookkeeping concern, not a transient API failure.
+            continue
+
+        if response.status_code == 429 and attempt < _MAX_RETRIES:
+            # Spotify documents Retry-After in seconds. Fall back to
+            # exponential backoff if the header is absent or garbage.
+            try:
+                wait = float(response.headers.get("Retry-After", ""))
+            except ValueError:
+                wait = _backoff_seconds(attempt)
+            time.sleep(min(wait, _MAX_BACKOFF_SECONDS))
+            continue
+
+        if 500 <= response.status_code < 600 and attempt < _MAX_RETRIES:
+            time.sleep(_backoff_seconds(attempt))
+            continue
+
         return response
+
     return response
 
 
@@ -157,9 +206,17 @@ def create_playlist(name: str, description: str = "", public: bool = False) -> d
 
 def _parse_spotify_url(url: str) -> tuple[str, str] | None:
     """Extract (type, id) from a Spotify URL."""
-    match = re.search(r"open\.spotify\.com/(track|album)/([a-zA-Z0-9]+)", url)
+    match = re.search(r"open\.spotify\.com/(track|album|playlist)/([a-zA-Z0-9]+)", url)
     if match:
         return match.group(1), match.group(2)
+    return None
+
+
+def extract_playlist_id(url: str) -> str | None:
+    """Extract the playlist ID from an open.spotify.com playlist URL."""
+    parsed = _parse_spotify_url(url)
+    if parsed and parsed[0] == "playlist":
+        return parsed[1]
     return None
 
 
@@ -201,3 +258,161 @@ def add_tracks_to_playlist(playlist_id: str, track_uris: list[str]) -> dict:
         resp.raise_for_status()
         added += len(batch)
     return {"added": added}
+
+
+def get_playlist(playlist_id: str) -> dict:
+    """Fetch playlist metadata. Returns {id, name, url}."""
+    resp = _api_request("GET", f"https://api.spotify.com/v1/playlists/{playlist_id}",
+                        params={"fields": "id,name,external_urls"})
+    resp.raise_for_status()
+    data = resp.json()
+    return {
+        "id": data["id"],
+        "name": data.get("name", ""),
+        "url": data.get("external_urls", {}).get("spotify", ""),
+    }
+
+
+def get_playlist_track_uris(playlist_id: str) -> list[str]:
+    """Return every track URI in a playlist, paginated."""
+    uris: list[str] = []
+    url = (f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+           "?fields=items(track(uri)),next&limit=100")
+    while url:
+        resp = _api_request("GET", url)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        for item in data.get("items", []):
+            track = item.get("track") or {}
+            uri = track.get("uri")
+            # Local files and removed tracks have no usable URI; skip them.
+            if uri and uri.startswith("spotify:track:"):
+                uris.append(uri)
+        url = data.get("next")
+    return uris
+
+
+def _get_playlist_state(playlist_id: str) -> dict:
+    """Capture (snapshot_id, items-with-positions) for a playlist.
+
+    Items include every entry that has a URI, with its position in the
+    playlist. This is precision input for snapshot-based deletes — we
+    don't filter out non-track URIs here because their positions still
+    matter for the math.
+    """
+    meta_resp = _api_request("GET",
+                             f"https://api.spotify.com/v1/playlists/{playlist_id}",
+                             params={"fields": "snapshot_id"})
+    meta_resp.raise_for_status()
+    snapshot_id = meta_resp.json().get("snapshot_id", "")
+
+    items: list[tuple[str, int]] = []
+    pos = 0
+    url = (f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+           "?fields=items(track(uri)),next&limit=100")
+    while url:
+        resp = _api_request("GET", url)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        for item in data.get("items", []):
+            uri = (item.get("track") or {}).get("uri")
+            if uri:
+                items.append((uri, pos))
+            pos += 1  # increment even for null-URI rows; positions are absolute
+        url = data.get("next")
+    return {"snapshot_id": snapshot_id, "items": items}
+
+
+def _remove_tracks_by_position(playlist_id: str,
+                               items: list[tuple[str, int]],
+                               snapshot_id: str) -> None:
+    """Remove tracks at specific positions using a captured snapshot_id.
+
+    Spotify's DELETE accepts up to 100 entries in `tracks`; we group
+    positions by URI within each batch in case the same URI sits at
+    multiple positions. The snapshot_id pins the meaning of those
+    positions even after other modifications (our POSTs in the
+    surrounding flow append at the tail, so the snapshot's positions
+    still identify the right items).
+    """
+    if not items:
+        return
+    for i in range(0, len(items), 100):
+        batch = items[i:i + 100]
+        by_uri: dict[str, list[int]] = {}
+        for uri, position in batch:
+            by_uri.setdefault(uri, []).append(position)
+        payload = {
+            "tracks": [{"uri": uri, "positions": positions}
+                       for uri, positions in by_uri.items()],
+            "snapshot_id": snapshot_id,
+        }
+        resp = _api_request("DELETE",
+                            f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
+                            json=payload)
+        resp.raise_for_status()
+
+
+def replace_playlist_tracks(playlist_id: str, track_uris: list[str]) -> dict:
+    """Replace the entire contents of a playlist with `track_uris`.
+
+    Uses an add-then-delete sequence (rather than the obvious
+    PUT-clear-then-POST) so that the playlist is never strictly worse
+    than its starting state during the operation. The worst possible
+    failure mode is leftover old tracks alongside the new ones, which
+    is visible and recoverable; the PUT approach can produce silent
+    *missing* tracks if a later batch fails.
+
+    Sequence:
+      1. Capture (snapshot_id, items-with-positions) of the current
+         playlist. Items at indices [0..N-1] are the "old" set.
+      2. POST track_uris in 100-batches → playlist is now
+         [old..., new...]. If a batch fails the playlist is in a
+         non-destructive intermediate state and the exception
+         propagates.
+      3. DELETE the old items by snapshot+position in 100-batches.
+         The snapshot_id ensures Spotify resolves positions against
+         the pre-modification state, so concurrent edits don't make
+         us delete the wrong things.
+
+    The caller's safety net is the dated backup playlist created
+    upstream — if anything raises here, that backup is intact.
+    """
+    state = _get_playlist_state(playlist_id)
+    old_items = state["items"]
+    snapshot_id = state["snapshot_id"]
+
+    if track_uris:
+        add_tracks_to_playlist(playlist_id, track_uris)
+
+    _remove_tracks_by_position(playlist_id, old_items, snapshot_id)
+
+    return {"replaced": len(track_uris)}
+
+
+def delete_playlist(playlist_id: str) -> None:
+    """Unfollow (effectively delete for the owning user) a playlist."""
+    resp = _api_request("DELETE",
+                        f"https://api.spotify.com/v1/playlists/{playlist_id}/followers")
+    resp.raise_for_status()
+
+
+def find_user_playlists_by_name_prefix(prefix: str) -> list[dict]:
+    """List the authenticated user's playlists whose name starts with
+    `prefix`. Paginates through /v1/me/playlists. Returns [{id, name}].
+    """
+    matches: list[dict] = []
+    url = "https://api.spotify.com/v1/me/playlists?limit=50"
+    while url:
+        resp = _api_request("GET", url)
+        if resp.status_code != 200:
+            break
+        data = resp.json()
+        for p in data.get("items", []):
+            name = p.get("name", "") or ""
+            if name.startswith(prefix):
+                matches.append({"id": p["id"], "name": name})
+        url = data.get("next")
+    return matches

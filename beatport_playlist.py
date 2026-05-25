@@ -20,6 +20,7 @@ _TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 
 _RELEASE_URL_PATTERN = re.compile(r"beatport\.com/release/[^/]+/(\d+)")
+_TRACK_URL_PATTERN = re.compile(r"beatport\.com/track/[^/]+/(\d+)")
 _SCRIPT_SRC_PATTERN = re.compile(r'src="([^"]*\.js)"')
 _CLIENT_ID_PATTERN = re.compile(r"API_CLIENT_ID:\s*'([^']+)'")
 
@@ -213,14 +214,66 @@ def extract_release_id(beatport_url: str) -> Optional[int]:
     return None
 
 
+def extract_track_id(beatport_url: str) -> Optional[int]:
+    """Extract the numeric track ID from a Beatport single-track URL."""
+    match = _TRACK_URL_PATTERN.search(beatport_url)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def get_track(track_id: int) -> Optional[dict]:
+    """Fetch a single track via the authenticated API. Returns the track
+    dict (id, name, mix_name, artists, ...) or None on failure.
+    """
+    try:
+        resp = _api_request("GET", f"/v4/catalog/tracks/{track_id}/")
+    except RuntimeError:
+        return None
+    return resp.json()
+
+
+def get_release(release_id: int) -> Optional[dict]:
+    """Fetch a single release via the authenticated API. Returns the
+    release dict (id, name, track_count, ...) or None on failure.
+    """
+    try:
+        resp = _api_request("GET", f"/v4/catalog/releases/{release_id}/")
+    except RuntimeError:
+        return None
+    return resp.json()
+
+
+_MIX_TAIL_PATTERN = re.compile(
+    r"\s*[\(\[\-]\s*(original|extended|radio|club|dub|instrumental|vip|vocal)\s*(mix|edit|version)?\s*[\)\]]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def strip_mix_name(name: str) -> str:
+    """Remove trailing '(Original Mix)', '[Extended Mix]', '- Radio Edit' etc.
+
+    Beatport pads track titles with the mix variant which is absent from
+    the Spotify catalog title, so it tanks search scores.
+    """
+    cleaned = _MIX_TAIL_PATTERN.sub("", name or "").strip()
+    return cleaned or name
+
+
 def get_release_tracks(beatport_url: str) -> list[dict]:
-    """Resolve a Beatport release URL to a list of full track dicts via
-    the authenticated API. Returns [] for non-release URLs or when not
-    authenticated.
+    """Resolve a Beatport URL to a list of full track dicts via the
+    authenticated API. Handles both release URLs (returns all tracks on
+    the release) and single-track URLs (returns a one-element list).
+    Returns [] when the URL isn't recognised or when not authenticated.
 
     Each track has at least: id, name, mix_name, and artists (list of
     {id, name, ...}).
     """
+    track_id = extract_track_id(beatport_url)
+    if track_id is not None:
+        track = get_track(track_id)
+        return [track] if track else []
+
     release_id = extract_release_id(beatport_url)
     if release_id is None:
         return []
@@ -234,7 +287,7 @@ def get_release_tracks(beatport_url: str) -> list[dict]:
 
 
 def get_track_ids(beatport_url: str) -> list[int]:
-    """Resolve a Beatport release URL to a list of track IDs."""
+    """Resolve a Beatport release or track URL to a list of track IDs."""
     return [t["id"] for t in get_release_tracks(beatport_url) if "id" in t]
 
 
@@ -245,19 +298,29 @@ def create_playlist(name: str) -> dict:
     return {"id": data["id"], "name": data.get("name", name)}
 
 
-def get_my_playlists() -> list[dict]:
-    """Get the authenticated user's playlists."""
-    resp = _api_request("GET", "/v4/my/playlists/")
-    data = resp.json()
-    results = data.get("results", data) if isinstance(data, dict) else data
-    return [{"id": p["id"], "name": p.get("name", f"Playlist {p['id']}")} for p in results]
+# Beatport doesn't publicly document a per-request cap on the bulk
+# endpoint, but matching Spotify's 100-item cap is a safe ceiling and
+# keeps each request bounded. Bump if you see Beatport accept larger
+# payloads reliably.
+_BEATPORT_BULK_LIMIT = 100
 
 
 def add_tracks_to_playlist(playlist_id: int, track_ids: list[int]) -> dict:
-    """Add tracks to a Beatport playlist."""
-    resp = _api_request(
-        "POST",
-        f"/v4/my/playlists/{playlist_id}/tracks/bulk/",
-        json={"track_ids": track_ids},
-    )
-    return resp.json()
+    """Add tracks to a Beatport playlist.
+
+    Batches requests at _BEATPORT_BULK_LIMIT so a single section of
+    >100 tracks doesn't get rejected outright. Returns the last
+    response's JSON merged with a total `added` count.
+    """
+    last_resp: dict = {}
+    added = 0
+    for i in range(0, len(track_ids), _BEATPORT_BULK_LIMIT):
+        batch = track_ids[i:i + _BEATPORT_BULK_LIMIT]
+        resp = _api_request(
+            "POST",
+            f"/v4/my/playlists/{playlist_id}/tracks/bulk/",
+            json={"track_ids": batch},
+        )
+        last_resp = resp.json()
+        added += len(batch)
+    return {**last_resp, "added": added}

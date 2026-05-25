@@ -1,92 +1,81 @@
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from beatport_client import _fetch_beatport_title, verify_beatport_link
-
-
-BEATPORT_HTML = """
-<html><head>
-<meta property="og:title" content="Acelin, Maddy Lucas - Home Alone (Extended Mix) [YosH] | Music &amp; Downloads on Beatport"/>
-</head></html>
-"""
-
-BEATPORT_HTML_NO_META = """
-<html><head><title>Beatport</title></head></html>
-"""
+from beatport_client import verify_beatport_link
 
 
-class TestFetchBeatportTitle:
-    @patch("beatport_client.requests.get")
-    def test_extracts_title_from_og_tag(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = BEATPORT_HTML
-        mock_get.return_value = mock_response
-
-        title = _fetch_beatport_title("https://www.beatport.com/release/home-alone/5898264")
-        assert title == "Home Alone (Extended Mix)"
-
-    @patch("beatport_client.requests.get")
-    def test_returns_none_on_404(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_get.return_value = mock_response
-
-        assert _fetch_beatport_title("https://www.beatport.com/release/x/123") is None
-
-    @patch("beatport_client.requests.get")
-    def test_returns_none_when_no_og_title(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = BEATPORT_HTML_NO_META
-        mock_get.return_value = mock_response
-
-        assert _fetch_beatport_title("https://www.beatport.com/release/x/123") is None
-
-
-class TestVerifyBeatportLink:
-    @patch("beatport_client.requests.get")
-    def test_matching_release(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = BEATPORT_HTML
-        mock_get.return_value = mock_response
-
+class TestVerifyBeatportLinkRelease:
+    @patch("beatport_client.get_release")
+    def test_matching_release(self, mock_get_release):
+        mock_get_release.return_value = {"name": "Home Alone", "track_count": 2}
         result = verify_beatport_link(
-            "Home Alone (Extended Mix)",
+            "Home Alone",
             "https://www.beatport.com/release/home-alone/5898264",
         )
         assert result[0] == 1.0
-        assert result[1] == "Home Alone (Extended Mix)"
+        assert result[1] == "Home Alone"
+        assert result[2] == 2
 
-    @patch("beatport_client.requests.get")
-    def test_partial_match(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.text = BEATPORT_HTML
-        mock_get.return_value = mock_response
-
-        score, title, _ = verify_beatport_link(
+    @patch("beatport_client.get_release")
+    def test_partial_match(self, mock_get_release):
+        mock_get_release.return_value = {"name": "Home Alone EP", "track_count": 4}
+        score, title, count = verify_beatport_link(
             "Home Alone",
             "https://www.beatport.com/release/home-alone/5898264",
         )
         assert 0.5 < score < 1.0
-        assert title == "Home Alone (Extended Mix)"
+        assert title == "Home Alone EP"
+        assert count == 4
 
-    def test_non_beatport_url_returns_none(self):
-        result = verify_beatport_link(
-            "Home Alone",
-            "https://open.spotify.com/track/abc123",
-        )
-        assert result is None
-
-    @patch("beatport_client.requests.get")
-    def test_api_failure_returns_none(self, mock_get):
-        mock_response = MagicMock()
-        mock_response.status_code = 403
-        mock_get.return_value = mock_response
-
-        result = verify_beatport_link(
+    @patch("beatport_client.get_release_tracks")
+    @patch("beatport_client.get_release")
+    def test_falls_back_to_track_count(self, mock_get_release, mock_tracks):
+        mock_get_release.return_value = {"name": "Home Alone"}
+        mock_tracks.return_value = [{"id": 1}, {"id": 2}, {"id": 3}]
+        _, _, count = verify_beatport_link(
             "Home Alone",
             "https://www.beatport.com/release/home-alone/5898264",
         )
-        assert result is None
+        assert count == 3
+
+    @patch("beatport_client.get_release", return_value=None)
+    def test_api_failure_returns_none(self, mock_get_release):
+        assert verify_beatport_link(
+            "Home Alone",
+            "https://www.beatport.com/release/home-alone/5898264",
+        ) is None
+
+    def test_non_beatport_url_returns_none(self):
+        assert verify_beatport_link(
+            "Home Alone",
+            "https://open.spotify.com/track/abc123",
+        ) is None
+
+
+class TestVerifyBeatportLinkTrack:
+    @patch("beatport_client.get_track")
+    def test_track_url_with_original_mix(self, mock_get_track):
+        mock_get_track.return_value = {"name": "Gritty", "mix_name": "Original Mix"}
+        score, title, count = verify_beatport_link(
+            "Gritty",
+            "https://www.beatport.com/track/gritty/12345",
+        )
+        assert score == 1.0
+        assert title == "Gritty"
+        assert count == 1
+
+    @patch("beatport_client.get_track")
+    def test_track_url_with_remix(self, mock_get_track):
+        mock_get_track.return_value = {"name": "Gritty", "mix_name": "VIP Mix"}
+        _, title, count = verify_beatport_link(
+            "Gritty",
+            "https://www.beatport.com/track/gritty/12345",
+        )
+        assert title == "Gritty (VIP Mix)"
+        assert count == 1
+
+    @patch("beatport_client.get_track", return_value=None)
+    def test_track_api_failure(self, mock_get_track):
+        assert verify_beatport_link(
+            "Gritty",
+            "https://www.beatport.com/track/gritty/12345",
+        ) is None

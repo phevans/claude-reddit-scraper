@@ -2,14 +2,11 @@ import json
 import time
 from unittest.mock import MagicMock, mock_open, patch
 
-import pytest
-
 from beatport_playlist import (
     _load_cached_token,
     _token_is_valid,
     add_tracks_to_playlist,
     extract_release_id,
-    get_my_playlists,
     get_track_ids,
 )
 
@@ -98,27 +95,6 @@ class TestGetTrackIds:
         assert get_track_ids("https://open.spotify.com/track/abc") == []
 
 
-class TestGetMyPlaylists:
-    @patch("beatport_playlist._get_valid_token", return_value="test_token")
-    @patch("beatport_playlist.requests.request")
-    def test_returns_playlist_list(self, mock_request, mock_token):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "results": [
-                {"id": 1, "name": "My DnB"},
-                {"id": 2, "name": "Favorites"},
-            ]
-        }
-        mock_resp.raise_for_status = MagicMock()
-        mock_request.return_value = mock_resp
-
-        playlists = get_my_playlists()
-        assert playlists == [
-            {"id": 1, "name": "My DnB"},
-            {"id": 2, "name": "Favorites"},
-        ]
-
-
 class TestAddTracksToPlaylist:
     @patch("beatport_playlist._get_valid_token", return_value="test_token")
     @patch("beatport_playlist.requests.request")
@@ -129,7 +105,8 @@ class TestAddTracksToPlaylist:
         mock_request.return_value = mock_resp
 
         result = add_tracks_to_playlist(42, [111, 222])
-        assert result == {"playlist_id": 42, "track_ids": [111, 222]}
+        # `added` is appended on top of the API response.
+        assert result == {"playlist_id": 42, "track_ids": [111, 222], "added": 2}
 
         mock_request.assert_called_once()
         call_kwargs = mock_request.call_args
@@ -137,46 +114,33 @@ class TestAddTracksToPlaylist:
         assert "/v4/my/playlists/42/tracks/bulk/" in call_kwargs[0][1]
         assert call_kwargs[1]["json"] == {"track_ids": [111, 222]}
 
+    @patch("beatport_playlist._BEATPORT_BULK_LIMIT", 100)
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request")
+    def test_batches_large_track_lists(self, mock_request, mock_token):
+        # 250 tracks across a 100-cap should split into 3 requests
+        # (100 + 100 + 50). The bulk endpoint isn't publicly documented
+        # to have a cap, but if we ever blow through one we want to
+        # have already split the payload.
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"ok": True}
+        mock_resp.raise_for_status = MagicMock()
+        mock_request.return_value = mock_resp
 
-class TestAppPlaylistRoutes:
-    @pytest.fixture
-    def client(self):
-        from app import app
-        app.config["TESTING"] = True
-        with app.test_client() as client:
-            yield client
+        track_ids = list(range(250))
+        result = add_tracks_to_playlist(42, track_ids)
 
-    @patch("app.get_my_playlists", return_value=[{"id": 1, "name": "Test"}])
-    def test_get_playlists(self, mock_playlists, client):
-        resp = client.get("/beatport/playlists")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data == [{"id": 1, "name": "Test"}]
+        assert mock_request.call_count == 3
+        batch_sizes = [len(c.kwargs["json"]["track_ids"])
+                       for c in mock_request.call_args_list]
+        assert batch_sizes == [100, 100, 50]
+        assert result["added"] == 250
 
-    @patch("app.get_my_playlists", side_effect=RuntimeError("No credentials"))
-    def test_get_playlists_error(self, mock_playlists, client):
-        resp = client.get("/beatport/playlists")
-        assert resp.status_code == 500
-        assert "error" in resp.get_json()
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request")
+    def test_empty_list_makes_no_request(self, mock_request, mock_token):
+        result = add_tracks_to_playlist(42, [])
+        mock_request.assert_not_called()
+        assert result == {"added": 0}
 
-    @patch("app.get_track_ids", return_value=[111, 222])
-    def test_resolve_tracks(self, mock_resolve, client):
-        resp = client.post(
-            "/beatport/resolve-tracks",
-            json={"beatport_url": "https://www.beatport.com/release/test/123"},
-        )
-        assert resp.status_code == 200
-        assert resp.get_json() == {"track_ids": [111, 222]}
 
-    @patch("app.beatport_add_tracks_to_playlist", return_value={"status": "ok"})
-    def test_add_tracks(self, mock_add, client):
-        resp = client.post(
-            "/beatport/add-tracks",
-            json={"playlist_id": 42, "track_ids": [111, 222]},
-        )
-        assert resp.status_code == 200
-        mock_add.assert_called_once_with(42, [111, 222])
-
-    def test_add_tracks_missing_params(self, client):
-        resp = client.post("/beatport/add-tracks", json={"track_ids": [111]})
-        assert resp.status_code == 400

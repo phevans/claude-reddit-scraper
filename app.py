@@ -1,28 +1,41 @@
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
 
-from beatport_client import scrape_beatport_tracks, verify_beatport_link
+from beatport_client import verify_beatport_link
 from beatport_playlist import (
     add_tracks_to_playlist as beatport_add_tracks_to_playlist,
     create_playlist as beatport_create_playlist,
-    get_my_playlists,
     get_release_tracks as beatport_get_release_tracks,
     get_track_ids,
     is_authenticated as beatport_is_authenticated,
     login_with_password as beatport_login_with_password,
+    strip_mix_name,
 )
 from parser import parse_releases
+from playlist_config import (
+    CANONICAL_DISPLAY_NAMES,
+    CANONICAL_KEYS,
+    classify_section,
+    lookup_spotify_playlists,
+)
 from reddit_client import get_latest_nmm_post
 from spotify_client import compute_similarity, search_spotify, verify_spotify_link
 from spotify_playlist import (
     add_tracks_to_playlist as spotify_add_tracks_to_playlist,
     create_playlist as spotify_create_playlist,
+    delete_playlist as spotify_delete_playlist,
     exchange_code as spotify_exchange_code,
+    extract_playlist_id as spotify_extract_playlist_id,
+    find_user_playlists_by_name_prefix as spotify_find_playlists_by_prefix,
     get_authorize_url as spotify_get_authorize_url,
+    get_playlist as spotify_get_playlist,
+    get_playlist_track_uris as spotify_get_playlist_track_uris,
     is_authenticated as spotify_is_authenticated,
+    replace_playlist_tracks as spotify_replace_playlist_tracks,
     resolve_track_uris as spotify_resolve_track_uris,
 )
 
@@ -51,15 +64,48 @@ def _verify_release(release):
 
     if not spotify_url:
         found, rejected = _search_spotify_cascade(release.artists, release.title, beatport_url)
-        if found:
+        # Step-3 (beatport-track) sources score against the *track*, not
+        # the release title, so a same-track-different-album false
+        # positive can sail through. Refuse to auto-apply when the
+        # album-title similarity is too low; surface as a "rejected"
+        # candidate so the user can still see it via the search button.
+        if found and _passes_album_sanity(found):
             release.links["Spotify"] = found["url"]
             release.spotify_match = found["match"]
             release.spotify_title = found["fetched_title"]
             release.spotify_auto = True
+        elif found:
+            release.spotify_search_rejected = found
         elif rejected:
             release.spotify_search_rejected = rejected
 
     return release
+
+
+# Below this, the candidate's album title is judged "completely
+# different" from the Reddit release title — we warn the user and
+# refuse to auto-apply.
+ALBUM_SANITY_THRESHOLD = 0.4
+
+
+def _passes_album_sanity(found: dict) -> bool:
+    score = found.get("album_title_match")
+    if score is None:
+        return True
+    return score >= ALBUM_SANITY_THRESHOLD
+
+
+def _missing_canonical_sections(sections) -> list[str]:
+    """Return canonical keys (in CANONICAL_KEYS order) that no parsed
+    section classifies into. Used to surface "post seems to be missing
+    Liquid" warnings.
+    """
+    hit: set[str] = set()
+    for section in sections:
+        key = classify_section(section.name)
+        if key:
+            hit.add(key)
+    return [k for k in CANONICAL_KEYS if k not in hit]
 
 
 @app.route("/")
@@ -73,8 +119,31 @@ def scrape():
         try:
             yield _sse("status", "Fetching latest New Music Monday post...")
 
+            if not beatport_is_authenticated():
+                yield _sse(
+                    "warning",
+                    "Beatport isn't connected — release titles, track counts, and the Spotify cascade "
+                    "(which looks up the first Beatport track to recover from VA releases) will be skipped. "
+                    "Connect Beatport above to enable.",
+                )
+
             html = get_latest_nmm_post()
             sections = parse_releases(html)
+
+            # Sanity check: every canonical subgenre bucket should be
+            # represented in the post. If one isn't, either the post
+            # genuinely omitted it (rare) or the parser/classifier
+            # missed a renamed heading — surface it so we don't
+            # silently drop a section's tracks.
+            missing = _missing_canonical_sections(sections)
+            if missing:
+                labels = ", ".join(CANONICAL_DISPLAY_NAMES[k] for k in missing)
+                yield _sse(
+                    "warning",
+                    f"Missing expected section(s) in this post: {labels}. "
+                    "Either the post omitted them, or the heading text drifted enough that "
+                    "the classifier didn't route it to a canonical bucket. Check the post.",
+                )
 
             # Collect all unique services across all sections
             all_services_set = {"Spotify"}
@@ -228,6 +297,12 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
             if results:
                 best = _best_match(results, score_against_artist, score_against_title)
                 if best and best["match"] >= threshold:
+                    # In an album search the candidate's fetched_title
+                    # IS the album title — score it against the Reddit
+                    # release title to catch unrelated-album hits.
+                    best["album_title_match"] = round(
+                        compute_similarity(title, best["fetched_title"]), 4
+                    )
                     best["source"] = "beatport_track_album_search"
                     best["service"] = "Spotify"
                     return best, best_rejected
@@ -240,6 +315,12 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
                     if best.get("album_url"):
                         best["url"] = best["album_url"]
                         best["fetched_title"] = best.get("album_name", best["fetched_title"])
+                    # Sanity-check the resolved album title against the
+                    # Reddit release title (see beatport_track_album_search
+                    # branch above).
+                    best["album_title_match"] = round(
+                        compute_similarity(title, best["fetched_title"]), 4
+                    )
                     best["source"] = "beatport_track_search"
                     best["service"] = "Spotify"
                     return best, best_rejected
@@ -253,48 +334,23 @@ def _is_various_artists(artist: str) -> bool:
     return a in {"various artists", "various", "va", "v/a", "v.a."}
 
 
-_MIX_TAIL_PATTERN = __import__("re").compile(
-    r"\s*[\(\[\-]\s*(original|extended|radio|club|dub|instrumental|vip|vocal)\s*(mix|edit|version)?\s*[\)\]]?\s*$",
-    __import__("re").IGNORECASE,
-)
-
-
-def _strip_mix_name(name: str) -> str:
-    """Remove trailing '(Original Mix)', '[Extended Mix]', '- Radio Edit' etc.
-
-    Beatport pads track titles with the mix variant which is not in the
-    Spotify catalog title, so it tanks search scores.
-    """
-    cleaned = _MIX_TAIL_PATTERN.sub("", name or "").strip()
-    return cleaned or name
-
-
 def _beatport_first_tracks(beatport_url: str) -> list[dict]:
     """Return tracks for a Beatport release as [{name, artists}, ...].
 
-    Prefers the authenticated /v4 API (Cloudflare blocks public
-    scraping), with the page scraper as a fallback. The track 'name' is
-    the bare title — mix_name ('Original Mix', 'Extended Mix') is
+    Pulls from the authenticated /v4 API. The track 'name' is the bare
+    title — the mix variant ('Original Mix', 'Extended Mix') is
     intentionally dropped because it pollutes Spotify searches.
     """
-    api_tracks = beatport_get_release_tracks(beatport_url)
-    if api_tracks:
-        out = []
-        for t in api_tracks:
-            name = _strip_mix_name((t.get("name") or "").strip())
-            if not name:
-                continue
-            artists = ", ".join(
-                a.get("name", "") for a in t.get("artists", []) if isinstance(a, dict)
-            )
-            out.append({"name": name, "artists": artists})
-        if out:
-            return out
-    # Fallback to HTML scraping (likely 403 from Cloudflare these days)
-    return [
-        {"name": _strip_mix_name(t["name"]), "artists": t.get("artists", "")}
-        for t in scrape_beatport_tracks(beatport_url)
-    ]
+    out = []
+    for t in beatport_get_release_tracks(beatport_url):
+        name = strip_mix_name((t.get("name") or "").strip())
+        if not name:
+            continue
+        artists = ", ".join(
+            a.get("name", "") for a in t.get("artists", []) if isinstance(a, dict)
+        )
+        out.append({"name": name, "artists": artists})
+    return out
 
 
 @app.route("/spotify/search", methods=["POST"])
@@ -313,40 +369,6 @@ def spotify_search():
     if rejected:
         resp["best_rejected"] = rejected
     return jsonify(resp)
-
-
-@app.route("/beatport/playlists")
-def beatport_playlists():
-    try:
-        playlists = get_my_playlists()
-        return jsonify(playlists)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/beatport/resolve-tracks", methods=["POST"])
-def beatport_resolve_tracks():
-    data = request.get_json()
-    beatport_url = data.get("beatport_url", "")
-    try:
-        track_ids = get_track_ids(beatport_url)
-        return jsonify({"track_ids": track_ids})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/beatport/add-tracks", methods=["POST"])
-def beatport_add_tracks():
-    data = request.get_json()
-    playlist_id = data.get("playlist_id")
-    track_ids = data.get("track_ids", [])
-    if not playlist_id or not track_ids:
-        return jsonify({"error": "playlist_id and track_ids are required"}), 400
-    try:
-        result = beatport_add_tracks_to_playlist(int(playlist_id), track_ids)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 def _get_callback_uri(path):
@@ -445,20 +467,109 @@ def _build_section_result(prefix: str, section: dict) -> dict:
                 spotify_url = rel.get("spotify_url", "")
                 if spotify_url:
                     sp_uris.extend(spotify_resolve_track_uris(spotify_url))
-            if sp_uris:
-                sp_playlist = spotify_create_playlist(playlist_name)
-                spotify_add_tracks_to_playlist(sp_playlist["id"], sp_uris)
-                section_result["spotify"] = {
-                    "success": True,
-                    "tracks_added": len(sp_uris),
-                    "playlist_url": sp_playlist.get("url", ""),
-                }
-            else:
-                section_result["spotify"] = {"success": True, "tracks_added": 0}
+            section_result["spotify"] = _spotify_section_update(
+                section_name, playlist_name, sp_uris,
+            )
     except Exception as e:
         section_result["spotify"] = {"success": False, "error": str(e)}
 
     return section_result
+
+
+def _spotify_section_update(section_name: str, fallback_name: str,
+                            new_uris: list[str]) -> dict:
+    """Apply the persistent + backup + yearly write for one section.
+
+    Order of operations (chosen so there's always at least one backup
+    of the previous contents on disk at every moment):
+
+      1. Resolve persistent + yearly URLs from the section name.
+      2. If no new_uris were resolved, do NOTHING destructive — leave
+         the persistent playlist alone. (A run that finds zero Spotify
+         links for a section shouldn't wipe last week's data.)
+      3. Read persistent's current name and track URIs.
+      4. If old tracks exist, create a fresh backup playlist named
+         "<persistent name> backup <YYYY-MM-DD>" containing them.
+      5. Replace persistent with new_uris.
+      6. Append new_uris to the yearly playlist (no dedup — user's
+         explicit choice; duplicates surface re-issues / reposts).
+      7. Delete any OTHER playlist whose name starts with
+         "<persistent name> backup " — so only the freshly-made
+         backup survives.
+
+    For sections with no persistent mapping the caller's old behaviour
+    is retained: a standalone playlist is created and `unmapped: True`
+    is set so the UI can flag it.
+    """
+    if not new_uris:
+        return {"success": True, "tracks_added": 0,
+                "note": "No Spotify tracks found in this section."}
+
+    mapping = lookup_spotify_playlists(section_name)
+    if not mapping:
+        # Unmapped subgenre — fall back to one-off creation, flag it.
+        sp_playlist = spotify_create_playlist(fallback_name)
+        spotify_add_tracks_to_playlist(sp_playlist["id"], new_uris)
+        return {
+            "success": True,
+            "tracks_added": len(new_uris),
+            "playlist_url": sp_playlist.get("url", ""),
+            "unmapped": True,
+        }
+
+    persistent_id = spotify_extract_playlist_id(mapping["persistent"])
+    if not persistent_id:
+        return {"success": False,
+                "error": f"Could not parse persistent playlist URL: {mapping['persistent']}"}
+
+    persistent_meta = spotify_get_playlist(persistent_id)
+    persistent_name = persistent_meta.get("name") or fallback_name
+    backup_prefix = f"{persistent_name} backup "
+
+    old_uris = spotify_get_playlist_track_uris(persistent_id)
+
+    backup_url = None
+    new_backup_id = None
+    if old_uris:
+        backup = spotify_create_playlist(
+            f"{backup_prefix}{date.today().isoformat()}"
+        )
+        spotify_add_tracks_to_playlist(backup["id"], old_uris)
+        backup_url = backup.get("url", "")
+        new_backup_id = backup["id"]
+
+    spotify_replace_playlist_tracks(persistent_id, new_uris)
+
+    yearly_added = 0
+    if mapping.get("yearly"):
+        yearly_id = spotify_extract_playlist_id(mapping["yearly"])
+        if yearly_id:
+            spotify_add_tracks_to_playlist(yearly_id, new_uris)
+            yearly_added = len(new_uris)
+
+    # Sweep any older backups for this section (do this LAST so we never
+    # have a window with zero backups).
+    deleted_old_backups = 0
+    for p in spotify_find_playlists_by_prefix(backup_prefix):
+        if p["id"] == new_backup_id:
+            continue
+        try:
+            spotify_delete_playlist(p["id"])
+            deleted_old_backups += 1
+        except Exception:
+            # Don't fail the whole section over a stale backup we couldn't
+            # unfollow — surface it instead.
+            pass
+
+    return {
+        "success": True,
+        "tracks_added": len(new_uris),
+        "playlist_url": mapping["persistent"],
+        "backup_url": backup_url,
+        "yearly_added": yearly_added,
+        "old_backups_deleted": deleted_old_backups,
+        "previous_track_count": len(old_uris),
+    }
 
 
 @app.route("/create-playlists", methods=["POST"])
