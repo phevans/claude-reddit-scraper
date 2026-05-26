@@ -290,6 +290,8 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
             if best.get("album_url"):
                 best["url"] = best["album_url"]
                 best["fetched_title"] = best.get("album_name", best["fetched_title"])
+                if best.get("album_artists"):
+                    best["artists"] = best["album_artists"]
             best["source"] = "track_search"
             best["service"] = "Spotify"
             return best, best_rejected
@@ -335,6 +337,8 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
                     if best.get("album_url"):
                         best["url"] = best["album_url"]
                         best["fetched_title"] = best.get("album_name", best["fetched_title"])
+                        if best.get("album_artists"):
+                            best["artists"] = best["album_artists"]
                     # Sanity-check the resolved album title against the
                     # Reddit release title (see beatport_track_album_search
                     # branch above).
@@ -367,6 +371,8 @@ def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "",
         if c.get("album_url"):
             c["url"] = c["album_url"]
             c["fetched_title"] = c.get("album_name") or c["fetched_title"]
+            if c.get("album_artists"):
+                c["artists"] = c["album_artists"]
         url = c.get("url", "")
         if not url or url in seen_urls:
             return
@@ -375,6 +381,7 @@ def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "",
         c["service"] = "Spotify"
         c.pop("album_url", None)
         c.pop("album_name", None)
+        c.pop("album_artists", None)
         candidates.append(c)
 
     results = search_spotify(query, "album")
@@ -427,13 +434,14 @@ def _search_spotify_raw_candidates(query: str, score_artist: str, score_title: s
                 continue
             seen_urls.add(url)
             fetched_title = r.get("album_name") or r.get("name", "")
-            result_combined = f"{r.get('artists', '')} - {fetched_title}".strip(" -")
+            artists = r.get("album_artists") or r.get("artists", "") if r.get("album_url") else r.get("artists", "")
+            result_combined = f"{artists} - {fetched_title}".strip(" -")
             score = compute_similarity(release_combined, result_combined)
             candidates.append({
                 "match": round(score, 4),
                 "fetched_title": fetched_title,
                 "url": url,
-                "artists": r.get("artists", ""),
+                "artists": artists,
                 "source": f"custom_{search_type}_search",
                 "service": "Spotify",
             })

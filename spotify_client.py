@@ -112,6 +112,7 @@ def search_spotify(query: str, search_type: str = "album", limit: int = 5) -> li
                     "artists": ", ".join(a.get("name", "") for a in item.get("artists", [])),
                     "album_name": album.get("name", ""),
                     "album_url": album.get("external_urls", {}).get("spotify", ""),
+                    "album_artists": ", ".join(a.get("name", "") for a in album.get("artists", [])),
                 })
         return results
     return None
