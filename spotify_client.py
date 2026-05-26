@@ -47,8 +47,8 @@ def _parse_spotify_url(url: str) -> tuple[str, str] | None:
     return None
 
 
-def _fetch_spotify_name(resource_type: str, resource_id: str) -> str | None:
-    """Fetch the name of a track or album from Spotify."""
+def _fetch_spotify_info(resource_type: str, resource_id: str) -> tuple[str, str] | None:
+    """Fetch the name and artists of a track or album from Spotify."""
     for attempt in range(2):
         token = _get_access_token()
         response = requests.get(
@@ -61,7 +61,10 @@ def _fetch_spotify_name(resource_type: str, resource_id: str) -> str | None:
             continue
         if response.status_code != 200:
             return None
-        return response.json().get("name")
+        data = response.json()
+        name = data.get("name", "")
+        artists = ", ".join(a.get("name", "") for a in data.get("artists", []))
+        return name, artists
     return None
 
 
@@ -114,18 +117,19 @@ def search_spotify(query: str, search_type: str = "album", limit: int = 5) -> li
     return None
 
 
-def verify_spotify_link(release_title: str, spotify_url: str) -> tuple[float, str] | None:
+def verify_spotify_link(release_title: str, spotify_url: str) -> tuple[float, str, str] | None:
     """Check a Spotify URL against a release title.
 
-    Returns (similarity_score, spotify_title) or None on failure.
+    Returns (similarity_score, spotify_title, spotify_artists) or None on failure.
     """
     parsed = _parse_spotify_url(spotify_url)
     if not parsed:
         return None
 
     resource_type, resource_id = parsed
-    spotify_name = _fetch_spotify_name(resource_type, resource_id)
-    if spotify_name is None:
+    info = _fetch_spotify_info(resource_type, resource_id)
+    if info is None:
         return None
 
-    return compute_similarity(release_title, spotify_name), spotify_name
+    name, artists = info
+    return compute_similarity(release_title, name), name, artists

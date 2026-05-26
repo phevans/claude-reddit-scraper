@@ -92,7 +92,7 @@ class TestVerifySpotifyLink:
     def test_matching_track(self, mock_get):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"name": "Jack (Hoax Rework)"}
+        mock_response.json.return_value = {"name": "Jack (Hoax Rework)", "artists": [{"name": "Calibre"}]}
         mock_get.return_value = mock_response
 
         with patch.dict("spotify_client._token_cache", _VALID_CACHE, clear=True):
@@ -100,22 +100,23 @@ class TestVerifySpotifyLink:
                 "Jack (Hoax Rework)",
                 "https://open.spotify.com/track/0Uekv0MjYK8cnsWDvQ3fld",
             )
-        assert result == (1.0, "Jack (Hoax Rework)")
+        assert result == (1.0, "Jack (Hoax Rework)", "Calibre")
 
     @patch("spotify_client.requests.get")
     def test_mismatched_track(self, mock_get):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"name": "Totally Wrong Track"}
+        mock_response.json.return_value = {"name": "Totally Wrong Track", "artists": [{"name": "Wrong Artist"}]}
         mock_get.return_value = mock_response
 
         with patch.dict("spotify_client._token_cache", _VALID_CACHE, clear=True):
-            score, title = verify_spotify_link(
+            score, title, artists = verify_spotify_link(
                 "Jack (Hoax Rework)",
                 "https://open.spotify.com/track/0Uekv0MjYK8cnsWDvQ3fld",
             )
         assert score < 0.5
         assert title == "Totally Wrong Track"
+        assert artists == "Wrong Artist"
 
     @patch("spotify_client.requests.get")
     def test_api_failure_returns_none(self, mock_get):
@@ -124,11 +125,11 @@ class TestVerifySpotifyLink:
         mock_get.return_value = mock_response
 
         with patch.dict("spotify_client._token_cache", _VALID_CACHE, clear=True):
-            score = verify_spotify_link(
+            result = verify_spotify_link(
                 "Jack",
                 "https://open.spotify.com/track/0Uekv0MjYK8cnsWDvQ3fld",
             )
-        assert score is None
+        assert result is None
 
     @patch.dict("os.environ", FAKE_ENV)
     @patch("spotify_client.requests.post")
@@ -144,7 +145,7 @@ class TestVerifySpotifyLink:
 
         resp_401 = MagicMock(status_code=401)
         resp_200 = MagicMock(status_code=200)
-        resp_200.json.return_value = {"name": "Good Track"}
+        resp_200.json.return_value = {"name": "Good Track", "artists": [{"name": "Good Artist"}]}
         mock_get.side_effect = [resp_401, resp_200]
 
         with patch.dict("spotify_client._token_cache", stale_cache, clear=True):
@@ -152,7 +153,7 @@ class TestVerifySpotifyLink:
                 "Good Track",
                 "https://open.spotify.com/track/0Uekv0MjYK8cnsWDvQ3fld",
             )
-        assert result == (1.0, "Good Track")
+        assert result == (1.0, "Good Track", "Good Artist")
         assert mock_post.call_count == 1  # fetched a new token
         assert mock_get.call_count == 2   # two attempts
 

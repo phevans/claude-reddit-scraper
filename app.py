@@ -57,7 +57,7 @@ def _verify_release(release):
     if spotify_url:
         result = verify_spotify_link(release.title, spotify_url)
         if result is not None:
-            release.spotify_match, release.spotify_title = result
+            release.spotify_match, release.spotify_title, release.spotify_artists = result
 
     beatport_url = release.links.get("Beatport")
     if beatport_url:
@@ -221,7 +221,7 @@ def verify_link():
     if result is None:
         return jsonify({"service": service, "match": None, "fetched_title": None, "error": "Could not fetch title from URL"})
 
-    # Beatport returns (score, title, track_count); Spotify returns (score, title)
+    # Beatport returns (score, title, track_count); Spotify returns (score, title, artists)
     match = result[0]
     fetched_title = result[1]
     return jsonify({"service": service, "match": round(match, 4), "fetched_title": fetched_title})
