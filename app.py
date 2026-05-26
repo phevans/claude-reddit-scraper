@@ -76,6 +76,7 @@ def _verify_release(release):
             release.links["Spotify"] = found["url"]
             release.spotify_match = found["match"]
             release.spotify_title = found["fetched_title"]
+            release.spotify_artists = found.get("artists") or None
             release.spotify_auto = True
         elif found:
             release.spotify_search_rejected = found

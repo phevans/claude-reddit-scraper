@@ -25,6 +25,7 @@
                     {% if service == "Spotify" %}
                         {% set match = release.spotify_match %}
                         {% set fetched_title = release.spotify_title %}
+                        {% set match_artists = release.spotify_artists %}
                         {% set is_auto = release.spotify_auto %}
                     {% elif service == "Beatport" %}
                         {% set match = release.beatport_match %}
@@ -58,7 +59,7 @@
                                 {% endif %}
                                 <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>
                             </div>
-                            <div class="link-match-score">{{ service }} {{ "%.2f"|format(match) }} — {{ fetched_title }}</div>
+                            <div class="link-match-score">{{ service }} {{ "%.2f"|format(match) }}{% if match_artists is defined and match_artists %} — {{ match_artists }}{% endif %} — {{ fetched_title }}</div>
                         </div>
                         {% endif %}
                     {% else %}
