@@ -242,6 +242,22 @@ def _best_match(results, release_artist, release_title):
     return best
 
 
+def _all_matches(results, release_artist, release_title):
+    """Score every result and return them all sorted by score descending."""
+    release_combined = f"{release_artist} - {release_title}".strip(" -")
+    scored = []
+    for r in results:
+        result_combined = f"{r.get('artists', '')} - {r['name']}".strip(" -")
+        score = compute_similarity(release_combined, result_combined)
+        entry = {"match": round(score, 4), "fetched_title": r["name"], "url": r.get("url", ""), "artists": r.get("artists", "")}
+        if "album_url" in r:
+            entry["album_url"] = r["album_url"]
+            entry["album_name"] = r.get("album_name", "")
+        scored.append(entry)
+    scored.sort(key=lambda x: x["match"], reverse=True)
+    return scored
+
+
 def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
     """Run the cascading Spotify search.
 
@@ -333,8 +349,13 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
     return None, best_rejected
 
 
-def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "", n: int = 3) -> list[dict]:
-    """Run all cascade steps and return the top-N candidates without early-returning."""
+def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "", n: int = 5) -> list[dict]:
+    """Run all cascade steps and return the top-N candidates without early-returning.
+
+    Steps 1 and 2 contribute their single best match. Step 3 contributes all
+    scored results from each sub-search so that multiple albums sharing the
+    same first track all appear as candidates.
+    """
     query = f"{artist} {title}".strip()
     seen_urls: set[str] = set()
     candidates: list[dict] = []
@@ -374,13 +395,17 @@ def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "",
             track_query = f"{search_artist} {first['name']}".strip()
             sa, st = search_artist, first["name"]
 
-            results = search_spotify(track_query, "album")
+            # Use limit=10 and add every result so albums sharing the same
+            # first track all surface as candidates rather than the top-1 only.
+            results = search_spotify(track_query, "album", limit=10)
             if results:
-                _add(_best_match(results, sa, st), "beatport_album_search")
+                for r in _all_matches(results, sa, st):
+                    _add(r, "beatport_album_search")
 
-            results = search_spotify(track_query, "track")
+            results = search_spotify(track_query, "track", limit=10)
             if results:
-                _add(_best_match(results, sa, st), "beatport_track_search")
+                for r in _all_matches(results, sa, st):
+                    _add(r, "beatport_track_search")
 
     candidates.sort(key=lambda c: c["match"], reverse=True)
     return candidates[:n]
