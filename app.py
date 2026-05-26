@@ -3,6 +3,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
+from version import VERSION
+
 from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
 
 from beatport_client import verify_beatport_link
@@ -111,7 +113,7 @@ def _missing_canonical_sections(sections) -> list[str]:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", version=VERSION)
 
 
 @app.route("/scrape")
