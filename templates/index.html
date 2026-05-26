@@ -157,6 +157,20 @@
             display: flex;
             gap: 6px;
         }
+        .search-candidate {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .search-candidate:last-child {
+            border-bottom: none;
+        }
+        .search-candidate-info {
+            flex: 1;
+            min-width: 0;
+        }
     </style>
 </head>
 <body>
@@ -421,92 +435,106 @@
     async function searchSpotify(btn) {
         const linkBox = btn.closest('.link-box');
         const row = linkBox.closest('tr');
-        const artist = row.dataset.releaseArtists;
-        const title = row.dataset.releaseTitle;
+        const artist = row.dataset.releaseArtists || '';
+        const title = row.dataset.releaseTitle || '';
         const beatportUrl = row.dataset.beatportUrl || '';
-
-        btn.disabled = true;
-        const origText = btn.innerHTML;
-        btn.innerHTML = '&#8987;';
 
         // Remove any existing prompt
         const oldPrompt = linkBox.querySelector('.link-search-prompt');
         if (oldPrompt) oldPrompt.remove();
 
-        try {
-            const resp = await fetch('/spotify/search', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({artist: artist, title: title, beatport_url: beatportUrl})
-            });
-            const data = await resp.json();
+        const defaultQuery = [artist, title].filter(Boolean).join(' ');
 
-            btn.innerHTML = origText;
-            btn.disabled = false;
+        const panel = document.createElement('div');
+        panel.className = 'link-search-prompt';
+        panel.innerHTML =
+            '<div style="display:flex;gap:6px;margin-bottom:6px">' +
+                '<input type="text" class="form-control form-control-sm search-query-input" value="' + escapeHtml(defaultQuery) + '" placeholder="Search Spotify...">' +
+                '<button class="btn btn-sm btn-primary search-run-btn" style="flex-shrink:0">Search</button>' +
+            '</div>' +
+            '<div class="search-candidates"></div>' +
+            '<div style="display:flex;gap:6px;margin-top:6px">' +
+                '<button class="btn btn-sm btn-outline-danger search-clear-btn">Clear link</button>' +
+                '<button class="btn btn-sm btn-outline-secondary search-dismiss-btn">Dismiss</button>' +
+            '</div>';
+        linkBox.appendChild(panel);
 
-            if (data.match === null || data.match === undefined) {
-                let rejectedHtml = '';
-                if (data.best_rejected) {
-                    const r = data.best_rejected;
-                    rejectedHtml = '<div class="prompt-details">Best result: ' +
-                        escapeHtml(r.artists || '') + ' — ' + escapeHtml(r.fetched_title || '') +
-                        ' (score: ' + (r.match || 0).toFixed(2) + ')</div>';
+        const queryInput = panel.querySelector('.search-query-input');
+        const candidatesEl = panel.querySelector('.search-candidates');
+        const runBtn = panel.querySelector('.search-run-btn');
+
+        panel.querySelector('.search-dismiss-btn').addEventListener('click', () => panel.remove());
+        panel.querySelector('.search-clear-btn').addEventListener('click', () => clearSpotifyLink(linkBox));
+
+        async function runSearch(useCustomQuery) {
+            runBtn.disabled = true;
+            runBtn.textContent = '...';
+            candidatesEl.innerHTML = '<div class="text-muted" style="font-size:0.75rem">Searching...</div>';
+
+            const body = {artist, title, beatport_url: beatportUrl};
+            if (useCustomQuery) body.query = queryInput.value.trim();
+
+            try {
+                const resp = await fetch('/spotify/search', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                candidatesEl.innerHTML = '';
+
+                const items = data.candidates || [];
+                if (items.length === 0) {
+                    candidatesEl.innerHTML = '<div class="text-muted" style="font-size:0.75rem">No matches found.</div>';
+                } else {
+                    items.forEach(c => {
+                        const scoreColor = c.match >= 0.8 ? '#198754' : c.match >= 0.6 ? '#856404' : '#842029';
+                        const sourceLabel = (c.source || '').replace(/_/g, ' ');
+                        const item = document.createElement('div');
+                        item.className = 'search-candidate';
+                        item.innerHTML =
+                            '<div class="search-candidate-info">' +
+                                '<div><strong>' + escapeHtml(c.artists || '') + ' — ' + escapeHtml(c.fetched_title || '') + '</strong>' +
+                                ' <span style="font-size:0.7rem;color:' + scoreColor + '">' + c.match.toFixed(2) + '</span></div>' +
+                                '<div style="font-size:0.7rem;color:#6c757d">' + escapeHtml(sourceLabel) + '</div>' +
+                                '<div style="font-size:0.7rem;word-break:break-all"><a href="' + escapeHtml(c.url) + '" target="_blank" rel="noopener">' + escapeHtml(c.url) + '</a></div>' +
+                            '</div>' +
+                            '<button class="btn btn-sm btn-outline-success" style="flex-shrink:0">Use</button>';
+                        item.querySelector('button').addEventListener('click', () => {
+                            panel.remove();
+                            applySpotifyResult(linkBox, c);
+                        });
+                        candidatesEl.appendChild(item);
+                    });
                 }
-                const msg = document.createElement('div');
-                msg.className = 'link-search-prompt';
-                msg.innerHTML = '<div class="prompt-title">No good Spotify match found</div>' +
-                    rejectedHtml +
-                    '<div class="prompt-actions"><button class="btn btn-sm btn-outline-secondary" onclick="this.closest(\'.link-search-prompt\').remove()">Dismiss</button></div>';
-                linkBox.appendChild(msg);
-                return;
+            } catch (err) {
+                candidatesEl.innerHTML = '<div style="color:#842029;font-size:0.75rem">Search failed.</div>';
             }
 
-            // Step-3 cascade scores against the first Beatport track,
-            // not the release title — so a same-track / different-album
-            // hit can score high. The server returns album_title_match
-            // (release title vs. Spotify album title) when this path
-            // is taken. If it's low, warn loudly before they accept.
-            const ALBUM_WARN_THRESHOLD = 0.4;
-            const albumScore = data.album_title_match;
-            const releaseTitle = btn.closest('tr').dataset.releaseTitle || '';
-            const showWarning = (albumScore !== undefined && albumScore !== null && albumScore < ALBUM_WARN_THRESHOLD);
-            const warningHtml = showWarning
-                ? '<div class="mt-1 text-danger"><strong>⚠ Album title differs significantly</strong> — ' +
-                  '"' + escapeHtml(releaseTitle) + '" vs "' + escapeHtml(data.fetched_title) + '" ' +
-                  '(score: ' + albumScore.toFixed(2) + '). Likely a same-named track on an unrelated album — verify before accepting.</div>'
-                : '';
-
-            const prompt = document.createElement('div');
-            prompt.className = 'link-search-prompt';
-            prompt.innerHTML =
-                '<div class="prompt-title">Spotify match found (score: ' + data.match.toFixed(2) + ')</div>' +
-                '<div class="prompt-details">' +
-                    '<div><strong>' + escapeHtml(data.artists || '') + ' — ' + escapeHtml(data.fetched_title) + '</strong></div>' +
-                    '<div class="mt-1"><a href="' + escapeHtml(data.url) + '" target="_blank" rel="noopener">' + escapeHtml(data.url) + '</a></div>' +
-                    (data.source ? '<div class="mt-1 text-muted">Found via: ' + escapeHtml(data.source.replace(/_/g, ' ')) + '</div>' : '') +
-                    warningHtml +
-                '</div>' +
-                '<div class="prompt-actions">' +
-                    '<button class="btn btn-sm ' + (showWarning ? 'btn-warning' : 'btn-success') + ' prompt-accept">' +
-                        (showWarning ? 'Accept anyway' : 'Use this') +
-                    '</button>' +
-                    '<button class="btn btn-sm btn-outline-secondary prompt-dismiss">Dismiss</button>' +
-                '</div>';
-            linkBox.appendChild(prompt);
-
-            prompt.querySelector('.prompt-dismiss').addEventListener('click', function() {
-                prompt.remove();
-            });
-
-            prompt.querySelector('.prompt-accept').addEventListener('click', function() {
-                prompt.remove();
-                applySpotifyResult(linkBox, data);
-            });
-
-        } catch (err) {
-            btn.innerHTML = origText;
-            btn.disabled = false;
+            runBtn.disabled = false;
+            runBtn.textContent = 'Search';
         }
+
+        runBtn.addEventListener('click', () => runSearch(true));
+        queryInput.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(true); });
+
+        runSearch(false);
+    }
+
+    function clearSpotifyLink(linkBox) {
+        const prompt = linkBox.querySelector('.link-search-prompt');
+        if (prompt) prompt.remove();
+        const score = linkBox.querySelector('.link-match-score');
+        if (score) score.remove();
+
+        linkBox.className = 'link-box link-add-new mb-1';
+        linkBox.dataset.service = 'Spotify';
+
+        const contentDiv = linkBox.querySelector('.link-box-content');
+        contentDiv.innerHTML =
+            '<span class="add-link-label">+ Add Spotify link</span>' +
+            '<button type="button" class="link-search-btn" onclick="searchSpotify(this)" title="Search Spotify">&#128269;</button>' +
+            '<button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Add Spotify link">&#9998;</button>';
     }
 
     function applySpotifyResult(linkBox, data) {
@@ -669,11 +697,18 @@
             if (!table || table.tagName !== 'TABLE') return;
             const releases = [];
             table.querySelectorAll('tr[data-release-title]').forEach(row => {
+                // Read spotify_url from the live link element to pick up any user edits
+                let spotifyUrl = '';
+                const spotifyBox = row.querySelector('.link-box[data-service="Spotify"]');
+                if (spotifyBox) {
+                    const a = spotifyBox.querySelector('.link-box-content a');
+                    if (a) spotifyUrl = a.href;
+                }
                 releases.push({
                     artists: row.dataset.releaseArtists || '',
                     title: row.dataset.releaseTitle || '',
                     beatport_url: row.dataset.beatportUrl || '',
-                    spotify_url: row.dataset.spotifyUrl || '',
+                    spotify_url: spotifyUrl,
                 });
             });
             if (releases.length > 0) {

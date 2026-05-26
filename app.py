@@ -330,6 +330,90 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
     return None, best_rejected
 
 
+def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "", n: int = 3) -> list[dict]:
+    """Run all cascade steps and return the top-N candidates without early-returning."""
+    query = f"{artist} {title}".strip()
+    seen_urls: set[str] = set()
+    candidates: list[dict] = []
+
+    def _add(candidate, source):
+        if not candidate:
+            return
+        c = dict(candidate)
+        if c.get("album_url"):
+            c["url"] = c["album_url"]
+            c["fetched_title"] = c.get("album_name") or c["fetched_title"]
+        url = c.get("url", "")
+        if not url or url in seen_urls:
+            return
+        seen_urls.add(url)
+        c["source"] = source
+        c["service"] = "Spotify"
+        c.pop("album_url", None)
+        c.pop("album_name", None)
+        candidates.append(c)
+
+    results = search_spotify(query, "album")
+    if results:
+        _add(_best_match(results, artist, title), "album_search")
+
+    results = search_spotify(query, "track")
+    if results:
+        _add(_best_match(results, artist, title), "track_search")
+
+    if beatport_url:
+        tracks = _beatport_first_tracks(beatport_url)
+        if tracks:
+            first = tracks[0]
+            search_artist = artist
+            if _is_various_artists(artist) and first.get("artists"):
+                search_artist = first["artists"]
+            track_query = f"{search_artist} {first['name']}".strip()
+            sa, st = search_artist, first["name"]
+
+            results = search_spotify(track_query, "album")
+            if results:
+                _add(_best_match(results, sa, st), "beatport_album_search")
+
+            results = search_spotify(track_query, "track")
+            if results:
+                _add(_best_match(results, sa, st), "beatport_track_search")
+
+    candidates.sort(key=lambda c: c["match"], reverse=True)
+    return candidates[:n]
+
+
+def _search_spotify_raw_candidates(query: str, score_artist: str, score_title: str, n: int = 3) -> list[dict]:
+    """Search Spotify with a raw query, scoring results against the original artist+title."""
+    release_combined = f"{score_artist} - {score_title}".strip(" -")
+    seen_urls: set[str] = set()
+    candidates: list[dict] = []
+
+    for search_type in ("album", "track"):
+        results = search_spotify(query, search_type)
+        if not results:
+            continue
+        for r in results:
+            url = r.get("album_url") or r.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            fetched_title = r.get("album_name") or r.get("name", "")
+            result_combined = f"{r.get('artists', '')} - {fetched_title}".strip(" -")
+            score = compute_similarity(release_combined, result_combined)
+            candidates.append({
+                "match": round(score, 4),
+                "fetched_title": fetched_title,
+                "url": url,
+                "artists": r.get("artists", ""),
+                "source": f"custom_{search_type}_search",
+                "service": "Spotify",
+            })
+
+    candidates.sort(key=lambda c: c["match"], reverse=True)
+    return candidates[:n]
+
+
 def _is_various_artists(artist: str) -> bool:
     a = (artist or "").strip().lower()
     return a in {"various artists", "various", "va", "v/a", "v.a."}
@@ -360,16 +444,15 @@ def spotify_search():
     artist = data.get("artist", "")
     title = data.get("title", "")
     beatport_url = data.get("beatport_url", "")
-    if not title:
-        return jsonify({"error": "title is required"}), 400
+    query = (data.get("query") or "").strip()
+    if not title and not query:
+        return jsonify({"error": "title or query is required"}), 400
 
-    result, rejected = _search_spotify_cascade(artist, title, beatport_url)
-    if result:
-        return jsonify(result)
-    resp = {"service": "Spotify", "match": None, "error": "No good match found on Spotify"}
-    if rejected:
-        resp["best_rejected"] = rejected
-    return jsonify(resp)
+    if query:
+        candidates = _search_spotify_raw_candidates(query, artist, title)
+    else:
+        candidates = _collect_cascade_candidates(artist, title, beatport_url)
+    return jsonify({"candidates": candidates})
 
 
 def _get_callback_uri(path):
