@@ -454,6 +454,7 @@
             '</div>' +
             '<div class="search-candidates"></div>' +
             '<div style="display:flex;gap:6px;margin-top:6px">' +
+                (linkBox.dataset.origUrl ? '<button class="btn btn-sm btn-outline-warning search-revert-btn">Revert to original</button>' : '') +
                 '<button class="btn btn-sm btn-outline-danger search-clear-btn">Clear link</button>' +
                 '<button class="btn btn-sm btn-outline-secondary search-dismiss-btn">Dismiss</button>' +
             '</div>';
@@ -465,6 +466,8 @@
 
         panel.querySelector('.search-dismiss-btn').addEventListener('click', () => panel.remove());
         panel.querySelector('.search-clear-btn').addEventListener('click', () => clearSpotifyLink(linkBox));
+        const revertBtn = panel.querySelector('.search-revert-btn');
+        if (revertBtn) revertBtn.addEventListener('click', () => revertSpotifyLink(linkBox));
 
         async function runSearch(useCustomQuery) {
             runBtn.disabled = true;
@@ -535,6 +538,48 @@
             '<span class="add-link-label">+ Add Spotify link</span>' +
             '<button type="button" class="link-search-btn" onclick="searchSpotify(this)" title="Search Spotify">&#128269;</button>' +
             '<button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Add Spotify link">&#9998;</button>';
+    }
+
+    function revertSpotifyLink(linkBox) {
+        const origUrl = linkBox.dataset.origUrl || '';
+        if (!origUrl) { clearSpotifyLink(linkBox); return; }
+
+        const origMatch = linkBox.dataset.origMatch !== '' ? parseFloat(linkBox.dataset.origMatch) : null;
+        const origTitle = linkBox.dataset.origTitle || '';
+        const origArtists = linkBox.dataset.origArtists || '';
+        const origAuto = linkBox.dataset.origAuto === 'true';
+
+        const prompt = linkBox.querySelector('.link-search-prompt');
+        if (prompt) prompt.remove();
+        const score = linkBox.querySelector('.link-match-score');
+        if (score) score.remove();
+
+        if (origMatch === null || isNaN(origMatch)) {
+            linkBox.className = 'link-box link-unchecked mb-1';
+        } else if (origMatch >= 1.0) {
+            linkBox.className = 'link-box link-match-exact mb-1';
+        } else if (origMatch >= 0.7) {
+            linkBox.className = 'link-box link-match-partial mb-1';
+        } else {
+            linkBox.className = 'link-box link-match-poor mb-1';
+        }
+        linkBox.dataset.service = 'Spotify';
+
+        const contentDiv = linkBox.querySelector('.link-box-content');
+        contentDiv.innerHTML =
+            (origAuto ? '<span class="link-auto-badge" title="Auto-found by Spotify search">auto</span>' : '') +
+            '<a href="' + escapeHtml(origUrl) + '" target="_blank" rel="noopener">' + escapeHtml(origUrl) + '</a>' +
+            '<button type="button" class="link-search-btn" onclick="searchSpotify(this)" title="Search Spotify">&#128269;</button>' +
+            '<button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>';
+
+        if (origMatch !== null && !isNaN(origMatch) && origMatch < 1.0) {
+            const scoreEl = document.createElement('div');
+            scoreEl.className = 'link-match-score';
+            scoreEl.textContent = 'Spotify ' + origMatch.toFixed(2) +
+                (origArtists ? ' — ' + origArtists : '') +
+                ' — ' + origTitle;
+            linkBox.appendChild(scoreEl);
+        }
     }
 
     function applySpotifyResult(linkBox, data) {
