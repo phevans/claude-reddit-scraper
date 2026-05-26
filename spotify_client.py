@@ -15,6 +15,17 @@ _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 _token_cache: dict = {}  # keys: token, expires_at
 
 
+def _spotify_get(url: str, headers: dict, params: dict | None = None, max_retries: int = 3) -> requests.Response:
+    """GET a Spotify API endpoint, retrying on 429 with Retry-After backoff."""
+    for i in range(max_retries):
+        resp = requests.get(url, headers=headers, params=params)
+        if resp.status_code != 429:
+            return resp
+        retry_after = int(resp.headers.get("Retry-After", 2))
+        time.sleep(retry_after)
+    return resp
+
+
 def _get_access_token() -> str:
     """Get a Spotify access token using client credentials flow.
 
@@ -51,7 +62,7 @@ def _fetch_spotify_info(resource_type: str, resource_id: str) -> tuple[str, str]
     """Fetch the name and artists of a track or album from Spotify."""
     for attempt in range(2):
         token = _get_access_token()
-        response = requests.get(
+        response = _spotify_get(
             f"https://api.spotify.com/v1/{resource_type}s/{resource_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -83,10 +94,10 @@ def search_spotify(query: str, search_type: str = "album", limit: int = 5) -> li
 
     for attempt in range(2):
         token = _get_access_token()
-        response = requests.get(
+        response = _spotify_get(
             "https://api.spotify.com/v1/search",
-            params={"q": query, "type": search_type, "limit": limit},
             headers={"Authorization": f"Bearer {token}"},
+            params={"q": query, "type": search_type, "limit": limit},
         )
         if response.status_code == 401 and attempt == 0:
             _token_cache.clear()
