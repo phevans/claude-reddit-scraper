@@ -202,7 +202,11 @@ def _api_request(method: str, path: str, **kwargs) -> requests.Response:
         headers=headers,
         **kwargs,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason} for url: {resp.url} — {resp.text[:500]}",
+            response=resp,
+        )
     return resp
 
 
