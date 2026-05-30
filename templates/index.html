@@ -175,7 +175,7 @@
 </head>
 <body>
     <div class="container py-4">
-        <h1 class="mb-4">DnB New Music Monday <small class="text-muted" style="font-size:0.5em">v{{ version }}</small></h1>
+        <h1 class="mb-4" id="top">DnB New Music Monday <small class="text-muted" style="font-size:0.5em">v{{ version }}</small></h1>
 
         <button id="run-btn" class="btn btn-primary btn-lg mb-4" onclick="startScrape()">Run</button>
 
@@ -247,6 +247,9 @@
         </div>
 
         <div id="results"></div>
+        <div id="back-to-top" class="text-center py-3" style="display:none;">
+            <a href="#top">&#8593; Back to top</a>
+        </div>
     </div>
 
     <script>
@@ -301,6 +304,7 @@
             progressBar.textContent = 'Done';
             statusText.textContent = 'Complete!';
             showCreatePlaylistsPanel();
+            document.getElementById('back-to-top').style.display = '';
         });
 
         source.addEventListener('error', function(e) {
