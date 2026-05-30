@@ -744,7 +744,7 @@
     function collectSections() {
         const sections = [];
         document.querySelectorAll('#results h2').forEach(h2 => {
-            const sectionName = h2.textContent.trim();
+            const sectionName = h2.dataset.sectionName || h2.textContent.trim();
             const table = h2.nextElementSibling;
             if (!table || table.tagName !== 'TABLE') return;
             const releases = [];
