@@ -220,6 +220,9 @@
                             <button id="cancel-preview-btn" class="btn btn-outline-secondary ms-1" onclick="cancelPreview()" style="display:none;">
                                 Cancel
                             </button>
+                            <button id="retry-failed-btn" class="btn btn-warning ms-1" onclick="retryFailed()" style="display:none;">
+                                Retry failed
+                            </button>
                         </div>
                     </div>
                     <div id="create-playlists-status" class="mt-2"></div>
@@ -819,6 +822,7 @@
         const previewBtn = document.getElementById('create-playlists-btn');
         const commitBtn = document.getElementById('commit-playlists-btn');
         const cancelBtn = document.getElementById('cancel-preview-btn');
+        const retryBtn = document.getElementById('retry-failed-btn');
 
         if (state === 'idle') {
             previewBtn.disabled = false;
@@ -827,12 +831,14 @@
             commitBtn.style.display = 'none';
             commitBtn.disabled = true;
             cancelBtn.style.display = 'none';
+            retryBtn.style.display = 'none';
         } else if (state === 'previewing') {
             previewBtn.disabled = true;
             previewBtn.style.display = 'none';
             commitBtn.style.display = '';
             commitBtn.disabled = true;  // re-enabled when SSE 'done' arrives
             cancelBtn.style.display = '';
+            retryBtn.style.display = 'none';
         } else if (state === 'preview_ready') {
             commitBtn.disabled = false;
         } else if (state === 'committing') {
@@ -841,6 +847,7 @@
             commitBtn.disabled = true;
             commitBtn.style.display = 'none';
             cancelBtn.style.display = 'none';
+            retryBtn.style.display = 'none';
         }
     }
 
@@ -879,6 +886,7 @@
     }
 
     let _previewedSections = null;  // payload that was previewed — sent verbatim to commit
+    let _failedSections = null;     // subset of _previewedSections for retry, with skip flags
 
     async function previewPlaylists() {
         const status = document.getElementById('create-playlists-status');
@@ -910,8 +918,8 @@
                 section: (d) => {
                     try {
                         const s = JSON.parse(d);
-                        cardsEl.insertAdjacentHTML('beforeend', _renderPreviewCard(s));
                         done++;
+                        cardsEl.insertAdjacentHTML('beforeend', _renderPreviewCard(s, done, total));
                         progressEl.textContent = 'Building preview (' + done + '/' + total + ')...';
                     } catch (e) {}
                 },
@@ -938,15 +946,13 @@
         _setPlaylistState('idle');
     }
 
-    async function commitPlaylists() {
-        if (!_previewedSections) return;
-        const payload = _previewedSections;
+    async function _runCommit(payload) {
         const status = document.getElementById('create-playlists-status');
-
         _setPlaylistState('committing');
 
         let total = payload.sections.length;
         let done = 0;
+        const sectionResults = {};
         status.innerHTML =
             '<div class="text-muted mb-2" id="cp-progress">Updating playlists (0/' + total + ')...</div>' +
             '<table class="table table-sm"><thead><tr><th>Section</th><th>Beatport</th><th>Spotify</th></tr></thead>' +
@@ -963,15 +969,40 @@
                 section: (d) => {
                     try {
                         const s = JSON.parse(d);
+                        sectionResults[s.section] = s;
                         rowsEl.insertAdjacentHTML('beforeend', _renderSectionRow(s));
                         done++;
                         progressEl.textContent = 'Updating playlists (' + done + '/' + total + ')...';
                     } catch (e) {}
                 },
                 done: () => {
-                    progressEl.textContent = 'Done — ' + done + ' section' + (done === 1 ? '' : 's') + ' updated.';
-                    progressEl.classList.remove('text-muted');
-                    progressEl.classList.add('text-success');
+                    const failed = payload.sections.filter(sec => {
+                        const r = sectionResults[sec.name];
+                        return r && ((r.beatport && !r.beatport.success) || (r.spotify && !r.spotify.success));
+                    });
+                    if (failed.length > 0) {
+                        _failedSections = {
+                            prefix: payload.prefix,
+                            sections: failed.map(sec => {
+                                const r = sectionResults[sec.name];
+                                return Object.assign({}, sec, {
+                                    skip_beatport: !!(r.beatport && r.beatport.success),
+                                    skip_spotify:  !!(r.spotify  && r.spotify.success),
+                                });
+                            }),
+                        };
+                        const retryBtn = document.getElementById('retry-failed-btn');
+                        retryBtn.textContent = 'Retry failed (' + failed.length + ')';
+                        retryBtn.style.display = '';
+                        progressEl.textContent = done + ' section' + (done === 1 ? '' : 's') + ' updated — ' + failed.length + ' failed.';
+                        progressEl.classList.remove('text-muted');
+                        progressEl.classList.add('text-warning');
+                    } else {
+                        _failedSections = null;
+                        progressEl.textContent = 'Done — ' + done + ' section' + (done === 1 ? '' : 's') + ' updated.';
+                        progressEl.classList.remove('text-muted');
+                        progressEl.classList.add('text-success');
+                    }
                 },
                 error: (d) => {
                     progressEl.classList.remove('text-muted');
@@ -983,8 +1014,21 @@
             status.innerHTML = '<div class="alert alert-danger">Error: ' + err + '</div>';
         }
 
-        _previewedSections = null;
         _setPlaylistState('idle');
+    }
+
+    async function commitPlaylists() {
+        if (!_previewedSections) return;
+        const payload = _previewedSections;
+        _previewedSections = null;
+        await _runCommit(payload);
+    }
+
+    async function retryFailed() {
+        if (!_failedSections) return;
+        const payload = _failedSections;
+        _failedSections = null;
+        await _runCommit(payload);
     }
 
     function _renderTrackLine(t) {
@@ -994,11 +1038,11 @@
         return '<li>' + label + '</li>';
     }
 
-    function _renderPreviewCard(s) {
+    function _renderPreviewCard(s, idx, total) {
         const sp = s.spotify || {};
         const bp = s.beatport || {};
         const head = '<div class="card mb-3"><div class="card-body">' +
-            '<h6 class="card-title mb-2">' + escapeHtml(s.section) + '</h6>';
+            '<h6 class="card-title mb-2"><span class="text-muted me-2">' + idx + '/' + total + '</span>' + escapeHtml(s.section) + '</h6>';
 
         // Spotify summary
         let spHtml = '<div class="mb-2"><strong>Spotify:</strong> ';

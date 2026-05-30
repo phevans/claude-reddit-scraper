@@ -49,6 +49,7 @@
                                 {% endif %}
                                 <button type="button" class="link-edit-btn" onclick="toggleEditLink(this)" title="Edit link">&#9998;</button>
                             </div>
+                            {% if is_auto %}<div class="link-match-score">{{ service }} {{ "%.2f"|format(match) }}{% if match_artists %} — {{ match_artists }}{% endif %} — {{ fetched_title }}</div>{% endif %}
                         </div>
                         {% else %}
                         <div class="link-box {% if match >= 0.7 %}link-match-partial{% else %}link-match-poor{% endif %} mb-1" data-service="{{ service }}"{% if service == "Spotify" %} data-orig-url="{{ release.links[service] }}" data-orig-match="{{ match }}" data-orig-title="{{ fetched_title or '' }}" data-orig-artists="{{ match_artists or '' }}" data-orig-auto="{{ 'true' if is_auto else 'false' }}"{% endif %}>

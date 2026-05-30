@@ -560,38 +560,44 @@ def _build_section_result(prefix: str, section: dict) -> dict:
     section_result = {"section": section_name, "playlist_name": playlist_name,
                       "beatport": None, "spotify": None}
 
-    try:
-        if not beatport_is_authenticated():
-            section_result["beatport"] = {"success": False, "error": "Not authenticated"}
-        else:
-            bp_track_ids = []
-            for rel in releases:
-                beatport_url = rel.get("beatport_url", "")
-                if beatport_url:
-                    bp_track_ids.extend(get_track_ids(beatport_url))
-            if bp_track_ids:
-                bp_playlist = beatport_create_playlist(playlist_name)
-                beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
-                section_result["beatport"] = {"success": True, "tracks_added": len(bp_track_ids)}
+    if section.get("skip_beatport"):
+        section_result["beatport"] = None
+    else:
+        try:
+            if not beatport_is_authenticated():
+                section_result["beatport"] = {"success": False, "error": "Not authenticated"}
             else:
-                section_result["beatport"] = {"success": True, "tracks_added": 0}
-    except Exception as e:
-        section_result["beatport"] = {"success": False, "error": str(e)}
+                bp_track_ids = []
+                for rel in releases:
+                    beatport_url = rel.get("beatport_url", "")
+                    if beatport_url:
+                        bp_track_ids.extend(get_track_ids(beatport_url))
+                if bp_track_ids:
+                    bp_playlist = beatport_create_playlist(playlist_name)
+                    beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
+                    section_result["beatport"] = {"success": True, "tracks_added": len(bp_track_ids)}
+                else:
+                    section_result["beatport"] = {"success": True, "tracks_added": 0}
+        except Exception as e:
+            section_result["beatport"] = {"success": False, "error": str(e)}
 
-    try:
-        if not spotify_is_authenticated():
-            section_result["spotify"] = {"success": False, "error": "Not authenticated"}
-        else:
-            sp_uris = []
-            for rel in releases:
-                spotify_url = rel.get("spotify_url", "")
-                if spotify_url:
-                    sp_uris.extend(spotify_resolve_track_uris(spotify_url))
-            section_result["spotify"] = _spotify_section_update(
-                section_name, playlist_name, sp_uris,
-            )
-    except Exception as e:
-        section_result["spotify"] = {"success": False, "error": str(e)}
+    if section.get("skip_spotify"):
+        section_result["spotify"] = None
+    else:
+        try:
+            if not spotify_is_authenticated():
+                section_result["spotify"] = {"success": False, "error": "Not authenticated"}
+            else:
+                sp_uris = []
+                for rel in releases:
+                    spotify_url = rel.get("spotify_url", "")
+                    if spotify_url:
+                        sp_uris.extend(spotify_resolve_track_uris(spotify_url))
+                section_result["spotify"] = _spotify_section_update(
+                    section_name, playlist_name, sp_uris,
+                )
+        except Exception as e:
+            section_result["spotify"] = {"success": False, "error": str(e)}
 
     return section_result
 
