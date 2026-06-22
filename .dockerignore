@@ -1,0 +1,15 @@
+.git
+.gitignore
+.claude
+__pycache__
+**/__pycache__
+*.pyc
+tests
+.pytest_cache
+.elasticbeanstalk
+.ebextensions
+# Never bake runtime secrets/tokens into the image.
+*_token.json
+.env
+DEPLOY.md
+README.md

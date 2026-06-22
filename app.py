@@ -1,3 +1,4 @@
+import hmac
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -5,7 +6,17 @@ from datetime import date
 
 from version import VERSION
 
-from flask import Flask, Response, jsonify, redirect, render_template, request, stream_with_context
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    stream_with_context,
+    url_for,
+)
 
 from beatport_client import verify_beatport_link
 from beatport_playlist import (
@@ -46,6 +57,56 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# Signed-session key. Must be stable across instances (env var) so a
+# login cookie survives Lambda cold starts; falls back to a random
+# per-process key for local/dev where the gate below is off anyway.
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+
+# Optional shared-password gate. When APP_PASSWORD is set — e.g. on a
+# public Lambda Function URL that can write to Spotify/Beatport — every
+# route except /login, /healthz and static assets requires a signed
+# cookie. Unset => fully open, exactly as before, so local runs and the
+# test suite are unaffected. Cookie-based (not header-based) so the
+# EventSource /scrape stream, which can't set headers, still authenticates.
+APP_PASSWORD = os.environ.get("APP_PASSWORD")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=bool(APP_PASSWORD),
+)
+
+_OPEN_ENDPOINTS = {"login", "healthz", "static"}
+
+
+@app.before_request
+def _require_login():
+    if not APP_PASSWORD or request.endpoint in _OPEN_ENDPOINTS:
+        return None
+    if session.get("authed"):
+        return None
+    return redirect(url_for("login", next=request.full_path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not APP_PASSWORD:
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        if hmac.compare_digest(request.form.get("password", ""), APP_PASSWORD):
+            session["authed"] = True
+            # Only honour same-origin (path-only) redirect targets.
+            nxt = request.args.get("next", "")
+            dest = nxt if nxt.startswith("/") else url_for("index")
+            return redirect(dest)
+        return render_template("login.html", error="Incorrect password"), 401
+    return render_template("login.html", error=None)
+
+
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
 
 MAX_WORKERS = 10
 PREFERRED_SERVICE_ORDER = ["Beatport", "Bandcamp", "Spotify"]

@@ -23,6 +23,48 @@ class TestIndex:
         assert b"startScrape" in response.data
 
 
+class TestAuthGate:
+    """The opt-in shared-password gate. Off (APP_PASSWORD unset) by
+    default — every other test relies on the app being open."""
+
+    def test_gate_off_by_default_index_open(self, client):
+        # No patching: APP_PASSWORD is unset in the test environment.
+        assert client.get("/").status_code == 200
+
+    @patch("app.APP_PASSWORD", "hunter2")
+    def test_gate_on_redirects_to_login(self, client):
+        resp = client.get("/", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    @patch("app.APP_PASSWORD", "hunter2")
+    def test_healthz_open_even_when_gated(self, client):
+        resp = client.get("/healthz")
+        assert resp.status_code == 200
+        assert resp.data == b"ok"
+
+    @patch("app.APP_PASSWORD", "hunter2")
+    def test_correct_password_grants_access(self, client):
+        login = client.post("/login", data={"password": "hunter2"})
+        assert login.status_code == 302
+        # Session cookie now carried by the test client.
+        assert client.get("/").status_code == 200
+
+    @patch("app.APP_PASSWORD", "hunter2")
+    def test_wrong_password_rejected(self, client):
+        resp = client.post("/login", data={"password": "nope"})
+        assert resp.status_code == 401
+        assert client.get("/", follow_redirects=False).status_code == 302
+
+    @patch("app.APP_PASSWORD", "hunter2")
+    def test_login_next_only_allows_same_origin(self, client):
+        # Open-redirect guard: an absolute off-site target is ignored.
+        resp = client.post("/login?next=https://evil.example/x",
+                           data={"password": "hunter2"})
+        assert resp.status_code == 302
+        assert "evil.example" not in resp.headers["Location"]
+
+
 class TestScrape:
     def _collect_events(self, response):
         """Parse SSE events from a streaming response."""
