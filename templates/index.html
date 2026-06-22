@@ -773,7 +773,12 @@
     function _renderSectionRow(s) {
         let html = '<tr><td>' + escapeHtml(s.playlist_name) + '</td>';
         if (s.beatport && s.beatport.success) {
-            html += '<td class="text-success">' + s.beatport.tracks_added + ' tracks</td>';
+            let bpLabel = s.beatport.tracks_added + ' tracks';
+            if (s.beatport.skipped) {
+                bpLabel += ' <span class="text-warning">(' + s.beatport.skipped +
+                    ' skipped — bad link)</span>';
+            }
+            html += '<td class="text-success">' + bpLabel + '</td>';
         } else if (s.beatport) {
             html += '<td class="text-danger">' + escapeHtml(s.beatport.error || 'Failed') + '</td>';
         } else {

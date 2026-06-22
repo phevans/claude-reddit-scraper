@@ -568,16 +568,29 @@ def _build_section_result(prefix: str, section: dict) -> dict:
                 section_result["beatport"] = {"success": False, "error": "Not authenticated"}
             else:
                 bp_track_ids = []
+                skipped = 0
                 for rel in releases:
                     beatport_url = rel.get("beatport_url", "")
-                    if beatport_url:
-                        bp_track_ids.extend(get_track_ids(beatport_url))
+                    if not beatport_url:
+                        continue
+                    # get_track_ids resolves a bad/stale URL to [] rather
+                    # than raising, so one broken link can't fail the
+                    # whole section — just count it as skipped.
+                    ids = get_track_ids(beatport_url)
+                    if ids:
+                        bp_track_ids.extend(ids)
+                    else:
+                        skipped += 1
                 if bp_track_ids:
                     bp_playlist = beatport_create_playlist(playlist_name)
                     beatport_add_tracks_to_playlist(bp_playlist["id"], bp_track_ids)
-                    section_result["beatport"] = {"success": True, "tracks_added": len(bp_track_ids)}
+                    section_result["beatport"] = {
+                        "success": True, "tracks_added": len(bp_track_ids), "skipped": skipped
+                    }
                 else:
-                    section_result["beatport"] = {"success": True, "tracks_added": 0}
+                    section_result["beatport"] = {
+                        "success": True, "tracks_added": 0, "skipped": skipped
+                    }
         except Exception as e:
             section_result["beatport"] = {"success": False, "error": str(e)}
 

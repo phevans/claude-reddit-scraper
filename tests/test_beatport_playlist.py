@@ -2,13 +2,30 @@ import json
 import time
 from unittest.mock import MagicMock, mock_open, patch
 
+import requests
+
 from beatport_playlist import (
     _load_cached_token,
     _token_is_valid,
     add_tracks_to_playlist,
     extract_release_id,
+    get_release,
+    get_release_tracks,
+    get_track,
     get_track_ids,
 )
+
+
+def _error_response(status_code=404):
+    """A non-OK requests.Response stand-in: drives _api_request to raise
+    requests.HTTPError, the way a wrong/deleted Beatport ID does."""
+    resp = MagicMock()
+    resp.ok = False
+    resp.status_code = status_code
+    resp.reason = "Not Found"
+    resp.url = "https://api.beatport.com/v4/catalog/releases/0/"
+    resp.text = '{"detail": "Not found."}'
+    return resp
 
 
 class TestExtractReleaseId:
@@ -142,5 +159,38 @@ class TestAddTracksToPlaylist:
         result = add_tracks_to_playlist(42, [])
         mock_request.assert_not_called()
         assert result == {"added": 0}
+
+
+class TestGettersDegradeOnBadUrl:
+    """An incorrect Beatport URL whose ID still matches the regex returns a
+    404 from the API. The catalog getters must degrade to None/[] rather
+    than let the HTTPError abort the entire scrape (one bad link killed
+    the whole run)."""
+
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request")
+    def test_get_track_404_returns_none(self, mock_request, mock_token):
+        mock_request.return_value = _error_response(404)
+        assert get_track(99999999) is None
+
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request")
+    def test_get_release_404_returns_none(self, mock_request, mock_token):
+        mock_request.return_value = _error_response(404)
+        assert get_release(99999999) is None
+
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request")
+    def test_get_release_tracks_404_returns_empty(self, mock_request, mock_token):
+        mock_request.return_value = _error_response(404)
+        url = "https://www.beatport.com/release/gone/99999999"
+        assert get_release_tracks(url) == []
+
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request",
+           side_effect=requests.ConnectionError("boom"))
+    def test_get_release_network_error_returns_none(self, mock_request, mock_token):
+        # A transient network failure must also degrade, not crash.
+        assert get_release(123) is None
 
 

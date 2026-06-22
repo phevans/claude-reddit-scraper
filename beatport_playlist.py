@@ -229,23 +229,30 @@ def extract_track_id(beatport_url: str) -> Optional[int]:
 def get_track(track_id: int) -> Optional[dict]:
     """Fetch a single track via the authenticated API. Returns the track
     dict (id, name, mix_name, artists, ...) or None on failure.
+
+    A failure here is non-fatal by design: an incorrect/stale Beatport
+    URL yields a 404 (RequestException), and being unauthenticated yields
+    a RuntimeError. Both must degrade to None rather than crash the run.
     """
     try:
         resp = _api_request("GET", f"/v4/catalog/tracks/{track_id}/")
-    except RuntimeError:
+        return resp.json()
+    except (RuntimeError, requests.RequestException):
         return None
-    return resp.json()
 
 
 def get_release(release_id: int) -> Optional[dict]:
     """Fetch a single release via the authenticated API. Returns the
     release dict (id, name, track_count, ...) or None on failure.
+
+    See get_track: a bad URL (404) or missing auth must degrade to None,
+    never raise, so one broken link can't abort the whole scrape.
     """
     try:
         resp = _api_request("GET", f"/v4/catalog/releases/{release_id}/")
-    except RuntimeError:
+        return resp.json()
+    except (RuntimeError, requests.RequestException):
         return None
-    return resp.json()
 
 
 _MIX_TAIL_PATTERN = re.compile(
@@ -283,9 +290,9 @@ def get_release_tracks(beatport_url: str) -> list[dict]:
         return []
     try:
         resp = _api_request("GET", f"/v4/catalog/releases/{release_id}/tracks/")
-    except RuntimeError:
+        data = resp.json()
+    except (RuntimeError, requests.RequestException):
         return []
-    data = resp.json()
     tracks = data.get("results", data) if isinstance(data, dict) else data
     return tracks or []
 

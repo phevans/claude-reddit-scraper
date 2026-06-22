@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from beatport_client import verify_beatport_link
 
@@ -78,4 +78,26 @@ class TestVerifyBeatportLinkTrack:
         assert verify_beatport_link(
             "Gritty",
             "https://www.beatport.com/track/gritty/12345",
+        ) is None
+
+
+class TestVerifyBeatportLinkBadUrl:
+    """End-to-end: a wrong/deleted Beatport URL (404 from the API) must
+    return None, not raise. Regression for the crash where one bad link
+    aborted the whole scrape."""
+
+    @patch("beatport_playlist._get_valid_token", return_value="test_token")
+    @patch("beatport_playlist.requests.request")
+    def test_release_404_returns_none(self, mock_request, mock_token):
+        resp = MagicMock()
+        resp.ok = False
+        resp.status_code = 404
+        resp.reason = "Not Found"
+        resp.url = "https://api.beatport.com/v4/catalog/releases/1/"
+        resp.text = '{"detail": "Not found."}'
+        mock_request.return_value = resp
+
+        assert verify_beatport_link(
+            "Home Alone",
+            "https://www.beatport.com/release/home-alone/99999999",
         ) is None

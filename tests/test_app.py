@@ -310,6 +310,53 @@ class TestSpotifySectionUpdate:
         assert result["old_backups_deleted"] == 0
 
 
+class TestBuildSectionResultBeatport:
+    """Commit-phase Beatport branch: a bad/stale URL resolves to no track
+    IDs (get_track_ids returns [] after the getter fix) and must be
+    skipped, not fail the whole section."""
+
+    def _section(self):
+        return {
+            "name": "Liquid",
+            "skip_spotify": True,  # isolate the Beatport branch
+            "releases": [
+                {"beatport_url": "https://www.beatport.com/release/good/111"},
+                {"beatport_url": "https://www.beatport.com/release/gone/999"},
+            ],
+        }
+
+    @patch("app.beatport_add_tracks_to_playlist")
+    @patch("app.beatport_create_playlist", return_value={"id": 7, "name": "NMM Liquid"})
+    @patch("app.get_track_ids")
+    @patch("app.beatport_is_authenticated", return_value=True)
+    def test_bad_url_skipped_not_fatal(self, _auth, mock_ids, mock_create, mock_add):
+        from app import _build_section_result
+        # First release resolves; the second (bad link) returns [].
+        mock_ids.side_effect = [[101, 102], []]
+
+        result = _build_section_result("NMM", self._section())
+
+        bp = result["beatport"]
+        assert bp["success"] is True
+        assert bp["tracks_added"] == 2
+        assert bp["skipped"] == 1
+        # Only the resolved tracks get written.
+        mock_add.assert_called_once_with(7, [101, 102])
+
+    @patch("app.beatport_create_playlist")
+    @patch("app.get_track_ids", return_value=[])
+    @patch("app.beatport_is_authenticated", return_value=True)
+    def test_all_urls_bad_creates_no_playlist(self, _auth, _ids, mock_create):
+        from app import _build_section_result
+        result = _build_section_result("NMM", self._section())
+
+        bp = result["beatport"]
+        assert bp["success"] is True
+        assert bp["tracks_added"] == 0
+        assert bp["skipped"] == 2
+        mock_create.assert_not_called()
+
+
 class TestSearchSpotifyCascade:
     """The 3-step cascade in _search_spotify_cascade:
        1. Album search by `artist title`.
