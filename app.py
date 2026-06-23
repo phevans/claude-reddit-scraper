@@ -553,7 +553,16 @@ def spotify_search():
 
 
 def _get_callback_uri(path):
-    """Build a callback URI, respecting CloudFront/proxy HTTPS."""
+    """Build a callback URI for OAuth redirects.
+
+    Prefer PUBLIC_BASE_URL when set: behind CloudFront with Origin Access
+    Control the forwarded Host is the (IAM-only) Function URL, not the
+    public domain, so deriving it from headers would point OAuth callbacks
+    at an unreachable origin. Falls back to request headers otherwise.
+    """
+    base = os.environ.get("PUBLIC_BASE_URL")
+    if base:
+        return f"{base.rstrip('/')}{path}"
     proto = request.headers.get("CloudFront-Forwarded-Proto",
                                 request.headers.get("X-Forwarded-Proto",
                                                     request.scheme))

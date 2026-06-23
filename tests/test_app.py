@@ -23,6 +23,14 @@ class TestIndex:
         assert b"startScrape" in response.data
 
 
+class TestCallbackUri:
+    def test_prefers_public_base_url_and_strips_slash(self):
+        import app as app_module
+        with patch.dict("os.environ", {"PUBLIC_BASE_URL": "https://cf.example/"}):
+            assert (app_module._get_callback_uri("/spotify/callback")
+                    == "https://cf.example/spotify/callback")
+
+
 class TestAuthGate:
     """The opt-in shared-password gate. Off (APP_PASSWORD unset) by
     default — every other test relies on the app being open."""

@@ -13,7 +13,12 @@ load_dotenv()
 _CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
 _CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
 _SCOPES = "playlist-modify-public playlist-modify-private"
-_TOKEN_FILE = os.path.join(os.path.dirname(__file__), "spotify_token.json")
+# Token cache lives in TOKEN_DIR when set (e.g. /tmp on Lambda, whose
+# app dir is read-only) else next to the code. Either way it's only a
+# warm-cache; SPOTIFY_REFRESH_TOKEN re-bootstraps auth on a cold start.
+_TOKEN_FILE = os.path.join(
+    os.environ.get("TOKEN_DIR") or os.path.dirname(__file__), "spotify_token.json"
+)
 _TOKEN_EXPIRY_BUFFER = 60
 
 _user_token_cache: dict = {}
@@ -51,8 +56,15 @@ def exchange_code(code: str, redirect_uri: str) -> dict:
 
 
 def _save_token(token_data: dict) -> None:
-    with open(_TOKEN_FILE, "w") as f:
-        json.dump(token_data, f)
+    _user_token_cache.update(token_data)
+    try:
+        with open(_TOKEN_FILE, "w") as f:
+            json.dump(token_data, f)
+    except OSError:
+        # Read-only filesystem (e.g. Lambda /var/task). The in-memory
+        # cache above serves the warm container; cold starts re-bootstrap
+        # from SPOTIFY_REFRESH_TOKEN, so a failed write is non-fatal.
+        pass
 
 
 def _load_cached_token() -> dict | None:

@@ -16,7 +16,12 @@ _API_V4 = "https://api.beatport.com/v4"
 # This redirect_uri isn't actually used as a real redirect — we set
 # allow_redirects=False on authorize and pull the code from Location.
 _REDIRECT_URI = f"{_API_V4}/auth/o/post-message/"
-_TOKEN_FILE = os.path.join(os.path.dirname(__file__), "beatport_token.json")
+# See spotify_playlist: TOKEN_DIR keeps the cache writable on Lambda
+# (/var/task is read-only); BEATPORT_REFRESH_TOKEN re-bootstraps on a
+# cold start.
+_TOKEN_FILE = os.path.join(
+    os.environ.get("TOKEN_DIR") or os.path.dirname(__file__), "beatport_token.json"
+)
 _TOKEN_EXPIRY_BUFFER = 60  # seconds before expiry to trigger refresh
 
 _RELEASE_URL_PATTERN = re.compile(r"beatport\.com/release/[^/]+/(\d+)")
@@ -63,8 +68,13 @@ def _load_cached_token() -> Optional[dict]:
 
 
 def _save_token(token_data: dict) -> None:
-    with open(_TOKEN_FILE, "w") as f:
-        json.dump(token_data, f)
+    try:
+        with open(_TOKEN_FILE, "w") as f:
+            json.dump(token_data, f)
+    except OSError:
+        # Read-only filesystem (e.g. Lambda /var/task). Non-fatal: a cold
+        # start re-bootstraps from BEATPORT_REFRESH_TOKEN.
+        pass
 
 
 def _token_is_valid(token_data: dict) -> bool:

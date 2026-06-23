@@ -6,6 +6,7 @@ import requests
 
 from beatport_playlist import (
     _load_cached_token,
+    _save_token,
     _token_is_valid,
     add_tracks_to_playlist,
     extract_release_id,
@@ -14,6 +15,13 @@ from beatport_playlist import (
     get_track,
     get_track_ids,
 )
+
+
+class TestSaveTokenReadOnlyFs:
+    @patch("builtins.open", side_effect=OSError("Read-only file system"))
+    def test_save_token_swallows_readonly_error(self, _open):
+        # On Lambda the app dir is read-only; a failed write must not crash.
+        _save_token({"refresh_token": "x", "expires_at": 0})
 
 
 def _error_response(status_code=404):

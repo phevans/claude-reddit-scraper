@@ -12,8 +12,22 @@ from spotify_playlist import (
     _api_request,
     _backoff_seconds,
     _MAX_RETRIES,
+    _save_token,
     replace_playlist_tracks,
 )
+
+
+class TestSaveTokenReadOnlyFs:
+    @patch("builtins.open", side_effect=OSError("Read-only file system"))
+    def test_save_token_swallows_error_but_keeps_warm_cache(self, _open):
+        # On Lambda the app dir is read-only. The disk write fails, but the
+        # in-memory cache must still hold the token for the warm container.
+        spotify_playlist._user_token_cache.clear()
+        try:
+            _save_token({"access_token": "AT", "refresh_token": "RT"})
+            assert spotify_playlist._user_token_cache["access_token"] == "AT"
+        finally:
+            spotify_playlist._user_token_cache.clear()
 
 
 def _resp(status: int, headers: dict | None = None, json_body=None) -> MagicMock:
