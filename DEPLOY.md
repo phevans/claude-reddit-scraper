@@ -84,16 +84,35 @@ aws lambda add-permission --function-name dnb-scraper --region $REGION \
   --statement-id FunctionURLAllowPublicAccess \
   --action lambda:InvokeFunctionUrl --principal "*" \
   --function-url-auth-type NONE
+
+# REQUIRED since Oct 2025: public Function URLs (AuthType NONE) need
+# lambda:InvokeFunction in the resource policy too, NOT just
+# InvokeFunctionUrl. Without it, anonymous requests get 403 (while
+# in-account IAM-signed calls still work — a confusing symptom).
+# Note: no --function-url-auth-type here; that condition stops it applying.
+aws lambda add-permission --function-name dnb-scraper --region $REGION \
+  --statement-id AllowPublicInvoke \
+  --action lambda:InvokeFunction --principal "*"
 ```
 
-Note the `FunctionUrl` printed — that's your new app URL.
+Note the `FunctionUrl` printed — that's your new app URL. (No CloudFront
+needed — the direct Function URL is public and streams SSE; the app's
+`APP_PASSWORD` gate protects it.)
 
-## 6. Point Spotify OAuth at the new domain
+## 6. Spotify auth (durable refresh token)
 
-The callback URL is derived from the request host, so it becomes
-`https://<function-url>/spotify/callback`. Add that exact URL to the
-Redirect URIs in the Spotify app dashboard, or the Connect-Spotify popup
-will fail. (Beatport login needs no change.)
+Lambda's /tmp is ephemeral, so capture a Spotify refresh token once and
+set it as `SPOTIFY_REFRESH_TOKEN` (mirrors Beatport). Run:
+
+```sh
+python scripts/get_spotify_refresh_token.py   # HTTPS loopback OAuth
+```
+
+Prereq: register `https://127.0.0.1:8765/callback` (HTTPS — plain http
+loopback triggers a Spotify `server_error`) on the app whose client id
+matches `SPOTIFY_CLIENT_ID`. It prints `SPOTIFY_REFRESH_TOKEN=...`; add
+that to the Lambda env (step 4). For in-app re-auth later, also register
+`<PUBLIC_BASE_URL>/spotify/callback`. (Beatport needs no dashboard change.)
 
 ## 7. Smoke test
 
