@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import urlencode
 
 import requests
 from dotenv import load_dotenv
@@ -32,8 +33,10 @@ def get_authorize_url(redirect_uri: str) -> str:
         "redirect_uri": redirect_uri,
         "scope": _SCOPES,
     }
-    qs = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
-    return f"https://accounts.spotify.com/authorize?{qs}"
+    # Full percent-encoding (urlencode encodes "/" and ":" too). The old
+    # per-value quote() left slashes raw (https%3A//...), which Spotify's
+    # redirect_uri comparison can reject as "not matching configuration".
+    return f"https://accounts.spotify.com/authorize?{urlencode(params)}"
 
 
 def exchange_code(code: str, redirect_uri: str) -> dict:
