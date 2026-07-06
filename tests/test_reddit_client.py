@@ -126,6 +126,57 @@ class TestGetLatestNmmPost:
 
     @patch.dict("os.environ", FAKE_ENV)
     @patch("reddit_client.praw.Reddit")
+    def test_falls_back_to_subreddit_search_when_user_listing_empty(
+        self, mock_reddit_class
+    ):
+        # Production regression: Reddit started returning an EMPTY
+        # /user/<name>/submitted listing for the poster, so the roundup
+        # was invisible. The subreddit author-search must still find it.
+        mock_reddit = MagicMock()
+        mock_reddit_class.return_value = mock_reddit
+
+        mock_user = MagicMock()
+        mock_user.submissions.new.return_value = []  # the outage
+        mock_reddit.redditor.return_value = mock_user
+
+        real_post = MagicMock()
+        real_post.title = "Fresh Music! New tunes ... | New Music Monday! (Week 27)"
+        real_post.selftext_html = "<h1>New Releases</h1><h3>Dancefloor</h3>"
+        real_post.crosspost_parent = None
+
+        mock_subreddit = MagicMock()
+        mock_subreddit.search.return_value = [real_post]
+        mock_reddit.subreddit.return_value = mock_subreddit
+
+        assert get_latest_nmm_post() == "<h1>New Releases</h1><h3>Dancefloor</h3>"
+        mock_reddit.subreddit.assert_called_once_with("DnB")
+        assert mock_subreddit.search.call_args.args[0] == "author:TELMxWILSON"
+
+    @patch.dict("os.environ", FAKE_ENV)
+    @patch("reddit_client.praw.Reddit")
+    def test_deduplicates_post_present_in_both_sources(self, mock_reddit_class):
+        # The same submission can appear in both the user listing and the
+        # subreddit search; it must not be yielded (or processed) twice.
+        mock_reddit = MagicMock()
+        mock_reddit_class.return_value = mock_reddit
+
+        post = MagicMock()
+        post.id = "1uov8fk"
+        post.selftext_html = "<h1>New Releases</h1>"
+        post.crosspost_parent = None
+
+        mock_user = MagicMock()
+        mock_user.submissions.new.return_value = [post]
+        mock_reddit.redditor.return_value = mock_user
+
+        mock_subreddit = MagicMock()
+        mock_subreddit.search.return_value = [post]
+        mock_reddit.subreddit.return_value = mock_subreddit
+
+        assert get_latest_nmm_post() == "<h1>New Releases</h1>"
+
+    @patch.dict("os.environ", FAKE_ENV)
+    @patch("reddit_client.praw.Reddit")
     def test_raises_when_no_matching_post(self, mock_reddit_class):
         mock_reddit = MagicMock()
         mock_reddit_class.return_value = mock_reddit
