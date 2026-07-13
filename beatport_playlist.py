@@ -171,14 +171,19 @@ def _refresh_access_token(refresh_token: str) -> dict:
 
 
 def is_authenticated() -> bool:
-    """Check whether we have valid Beatport user credentials."""
-    token_data = _load_cached_token()
-    if not token_data:
+    """Whether we can actually obtain a usable Beatport access token.
+
+    Deliberately *validates* rather than checking a token merely exists: a
+    stale/revoked BEATPORT_REFRESH_TOKEN still "exists" but refreshes with a
+    400, and reporting that as connected made every Beatport feature (link
+    verification, the step-3 VA cascade, playlist writes) fail silently with
+    no scrape warning. _get_valid_token() reuses a live access token and
+    only hits the network when it must refresh, so this stays cheap.
+    """
+    try:
+        return bool(_get_valid_token())
+    except (RuntimeError, requests.RequestException):
         return False
-    if _token_is_valid(token_data):
-        return True
-    # Check if we can refresh
-    return bool(token_data.get("refresh_token"))
 
 
 def _get_valid_token() -> str:

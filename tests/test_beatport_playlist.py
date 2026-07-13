@@ -73,6 +73,29 @@ class TestTokenValidity:
         assert _token_is_valid({}) is False
 
 
+class TestIsAuthenticated:
+    """is_authenticated validates the token rather than just checking it
+    exists — a dead/revoked refresh token must report False so Beatport
+    failures surface instead of silently breaking the run."""
+
+    @patch("beatport_playlist._get_valid_token", return_value="access-tok")
+    def test_true_when_token_obtainable(self, _mock):
+        from beatport_playlist import is_authenticated
+        assert is_authenticated() is True
+
+    @patch("beatport_playlist._get_valid_token",
+           side_effect=RuntimeError("not authenticated"))
+    def test_false_when_refresh_fails(self, _mock):
+        from beatport_playlist import is_authenticated
+        assert is_authenticated() is False
+
+    @patch("beatport_playlist._get_valid_token",
+           side_effect=requests.RequestException("network"))
+    def test_false_on_network_error(self, _mock):
+        from beatport_playlist import is_authenticated
+        assert is_authenticated() is False
+
+
 class TestLoadCachedToken:
     @patch("builtins.open", side_effect=FileNotFoundError)
     def test_returns_none_when_no_file(self, mock_file):
