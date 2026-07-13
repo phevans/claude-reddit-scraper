@@ -2,6 +2,7 @@ import json
 import time
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
 import requests
 
 from beatport_playlist import (
@@ -94,6 +95,87 @@ class TestIsAuthenticated:
     def test_false_on_network_error(self, _mock):
         from beatport_playlist import is_authenticated
         assert is_authenticated() is False
+
+
+class TestBeatportCredentials:
+    """(username, password) resolution for the headless-login bootstrap:
+    username from a plain env var, password from an env var locally or an
+    SSM SecureString in prod."""
+
+    def setup_method(self):
+        import beatport_playlist
+        beatport_playlist._cached_password = None
+
+    @patch.dict("os.environ", {"BEATPORT_USERNAME": "", "BEATPORT_PASSWORD": ""},
+                clear=False)
+    def test_none_without_username(self):
+        from beatport_playlist import _beatport_credentials
+        with patch.dict("os.environ", {}, clear=True):
+            assert _beatport_credentials() == (None, None)
+
+    def test_uses_env_password(self):
+        from beatport_playlist import _beatport_credentials
+        with patch.dict("os.environ",
+                        {"BEATPORT_USERNAME": "me", "BEATPORT_PASSWORD": "pw"},
+                        clear=True):
+            assert _beatport_credentials() == ("me", "pw")
+
+    @patch("beatport_playlist._read_ssm_secure", return_value="ssm-pw")
+    def test_falls_back_to_ssm(self, mock_ssm):
+        from beatport_playlist import _beatport_credentials
+        with patch.dict("os.environ",
+                        {"BEATPORT_USERNAME": "me",
+                         "BEATPORT_PASSWORD_SSM": "/dnb-scraper/beatport-password"},
+                        clear=True):
+            assert _beatport_credentials() == ("me", "ssm-pw")
+        mock_ssm.assert_called_once_with("/dnb-scraper/beatport-password")
+
+    @patch("beatport_playlist._read_ssm_secure", return_value="ssm-pw")
+    def test_caches_ssm_password(self, mock_ssm):
+        from beatport_playlist import _beatport_credentials
+        with patch.dict("os.environ",
+                        {"BEATPORT_USERNAME": "me",
+                         "BEATPORT_PASSWORD_SSM": "/p"}, clear=True):
+            _beatport_credentials()
+            _beatport_credentials()
+        mock_ssm.assert_called_once()  # second call served from cache
+
+
+class TestGetValidTokenLoginFallback:
+    """When no cached/refreshable token is available, _get_valid_token
+    mints one via a fresh headless login (rotation-proof bootstrap)."""
+
+    @patch("beatport_playlist.login_with_password",
+           return_value={"access_token": "fresh-tok"})
+    @patch("beatport_playlist._beatport_credentials", return_value=("me", "pw"))
+    @patch("beatport_playlist._load_cached_token", return_value=None)
+    def test_logs_in_when_no_token(self, _load, _creds, mock_login):
+        from beatport_playlist import _get_valid_token
+        assert _get_valid_token() == "fresh-tok"
+        mock_login.assert_called_once_with("me", "pw")
+
+    @patch("beatport_playlist.login_with_password",
+           return_value={"access_token": "fresh-tok"})
+    @patch("beatport_playlist._beatport_credentials", return_value=("me", "pw"))
+    @patch("beatport_playlist._refresh_access_token",
+           side_effect=requests.HTTPError("400"))
+    @patch("beatport_playlist._load_cached_token",
+           return_value={"refresh_token": "spent", "expires_at": 0})
+    def test_falls_back_to_login_when_refresh_dies(
+        self, _load, _refresh, _creds, mock_login
+    ):
+        # The exact prod failure: env-seeded refresh token is spent (400),
+        # so fall through to a fresh login instead of raising.
+        from beatport_playlist import _get_valid_token
+        assert _get_valid_token() == "fresh-tok"
+        mock_login.assert_called_once()
+
+    @patch("beatport_playlist._beatport_credentials", return_value=(None, None))
+    @patch("beatport_playlist._load_cached_token", return_value=None)
+    def test_raises_without_credentials(self, _load, _creds):
+        from beatport_playlist import _get_valid_token
+        with pytest.raises(RuntimeError, match="not authenticated"):
+            _get_valid_token()
 
 
 class TestLoadCachedToken:

@@ -17,8 +17,10 @@ _API_V4 = "https://api.beatport.com/v4"
 # allow_redirects=False on authorize and pull the code from Location.
 _REDIRECT_URI = f"{_API_V4}/auth/o/post-message/"
 # See spotify_playlist: TOKEN_DIR keeps the cache writable on Lambda
-# (/var/task is read-only); BEATPORT_REFRESH_TOKEN re-bootstraps on a
-# cold start.
+# (/var/task is read-only). On a cold start /tmp is empty and Beatport
+# rotates refresh tokens, so auth re-bootstraps via a fresh headless
+# login from BEATPORT_USERNAME + BEATPORT_PASSWORD/BEATPORT_PASSWORD_SSM
+# (see _beatport_credentials / _get_valid_token).
 _TOKEN_FILE = os.path.join(
     os.environ.get("TOKEN_DIR") or os.path.dirname(__file__), "beatport_token.json"
 )
@@ -73,7 +75,8 @@ def _save_token(token_data: dict) -> None:
             json.dump(token_data, f)
     except OSError:
         # Read-only filesystem (e.g. Lambda /var/task). Non-fatal: a cold
-        # start re-bootstraps from BEATPORT_REFRESH_TOKEN.
+        # start re-bootstraps via a fresh headless login (see
+        # _get_valid_token).
         pass
 
 
@@ -186,14 +189,58 @@ def is_authenticated() -> bool:
         return False
 
 
+_cached_password: Optional[str] = None
+
+
+def _read_ssm_secure(name: str) -> Optional[str]:
+    """Read a SecureString from SSM Parameter Store (KMS-decrypted).
+
+    Kept import-lazy so boto3 is only loaded when actually reading from
+    SSM (prod), never in local/test runs that use a plain env var.
+    """
+    try:
+        import boto3
+
+        client = boto3.client("ssm", region_name=os.environ.get("AWS_REGION"))
+        resp = client.get_parameter(Name=name, WithDecryption=True)
+        return resp["Parameter"]["Value"]
+    except Exception:  # noqa: BLE001 — any SSM/boto failure ⇒ no creds
+        return None
+
+
+def _beatport_credentials() -> tuple[Optional[str], Optional[str]]:
+    """Return (username, password) for a headless login, or (None, None).
+
+    Username is a plain env var (not secret). The password comes from
+    BEATPORT_PASSWORD (local dev) or, in prod, an SSM SecureString named
+    by BEATPORT_PASSWORD_SSM — KMS-encrypted at rest rather than a
+    plaintext env var. The SSM value is cached in-process so warm
+    invocations don't re-hit SSM on every token mint.
+    """
+    global _cached_password
+    username = os.environ.get("BEATPORT_USERNAME")
+    if not username:
+        return None, None
+    password = os.environ.get("BEATPORT_PASSWORD") or _cached_password
+    if not password:
+        param = os.environ.get("BEATPORT_PASSWORD_SSM")
+        if param:
+            password = _read_ssm_secure(param)
+            _cached_password = password
+    return (username, password) if password else (None, None)
+
+
 def _get_valid_token() -> str:
-    """Get a valid access token, refreshing as needed."""
+    """Get a valid access token, refreshing or re-logging-in as needed."""
     token_data = _load_cached_token()
 
     if token_data and _token_is_valid(token_data):
         return token_data["access_token"]
 
-    # Try refresh
+    # Refresh works within a warm instance whose /tmp cache still holds a
+    # live refresh token. It does NOT survive cold starts: Beatport rotates
+    # refresh tokens on use, so a stored token is spent after one refresh
+    # and /tmp is wiped — hence the fresh-login fallback below.
     if token_data and token_data.get("refresh_token"):
         try:
             token_data = _refresh_access_token(token_data["refresh_token"])
@@ -201,8 +248,20 @@ def _get_valid_token() -> str:
         except requests.HTTPError:
             pass
 
+    # Durable, rotation-proof bootstrap: a fresh headless login from the
+    # stored username/password. We never depend on a token surviving a cold
+    # start — we just log in again.
+    username, password = _beatport_credentials()
+    if username and password:
+        try:
+            token_data = login_with_password(username, password)
+            return token_data["access_token"]
+        except (requests.RequestException, RuntimeError):
+            pass
+
     raise RuntimeError(
-        "Beatport not authenticated — click 'Connect Beatport' first"
+        "Beatport not authenticated — set BEATPORT_USERNAME + "
+        "BEATPORT_PASSWORD/BEATPORT_PASSWORD_SSM, or click 'Connect Beatport'"
     )
 
 
