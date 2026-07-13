@@ -584,11 +584,14 @@ class TestSearchSpotifyCascade:
     @patch("app._beatport_first_tracks")
     @patch("app._best_match")
     @patch("app.search_spotify")
-    def test_step3_uses_reddit_artist_for_non_va_releases(
+    def test_step3_always_prefers_beatport_track_artist(
         self, mock_search, mock_best, mock_tracks
     ):
-        """Conversely: for a normal (non-VA) release, step 3 should NOT
-        substitute the track artist. The Reddit artist is canonical.
+        """Step 3 always scores against the first Beatport track's own
+        artist — it's authoritative for the track being searched, whereas
+        the Reddit release artist may be VA, a label, or a multi-artist
+        string. (This replaced an older rule that only swapped on a literal
+        'Various Artists' and so missed comps not labelled exactly that.)
         """
         from app import _search_spotify_cascade
         mock_search.return_value = [{"name": "irrelevant"}]
@@ -598,12 +601,33 @@ class TestSearchSpotifyCascade:
             self._best(self.THRESHOLD_FAIL),
             self._best(self.THRESHOLD_OK),
         ]
-        _search_spotify_cascade("Acelin", "Home Alone",
+        # Release artist looks like a normal single artist, but Beatport's
+        # first-track artist differs — the track artist wins.
+        _search_spotify_cascade("Some Label", "Compilation Vol 1",
                                  beatport_url="https://bp/x/1")
-        step3_best_call = mock_best.call_args_list[2]
-        _, score_artist, _ = step3_best_call.args
-        # Crucially still "Acelin", not "Some Producer".
-        assert score_artist == "Acelin"
+        _, score_artist, _ = mock_best.call_args_list[2].args
+        assert score_artist == "Some Producer"
+
+    @patch("app._beatport_first_tracks")
+    @patch("app._best_match")
+    @patch("app.search_spotify")
+    def test_step3_falls_back_to_reddit_artist_when_beatport_has_none(
+        self, mock_search, mock_best, mock_tracks
+    ):
+        """When Beatport supplies no track artist, fall back to the Reddit
+        release artist rather than searching with an empty artist."""
+        from app import _search_spotify_cascade
+        mock_search.return_value = [{"name": "irrelevant"}]
+        mock_tracks.return_value = [{"name": "Track", "artists": ""}]
+        mock_best.side_effect = [
+            self._best(self.THRESHOLD_FAIL),
+            self._best(self.THRESHOLD_FAIL),
+            self._best(self.THRESHOLD_OK),
+        ]
+        _search_spotify_cascade("Real Artist", "Home Alone",
+                                 beatport_url="https://bp/x/1")
+        _, score_artist, _ = mock_best.call_args_list[2].args
+        assert score_artist == "Real Artist"
 
     @patch("app._beatport_first_tracks")
     @patch("app._best_match")
@@ -651,6 +675,44 @@ class TestSearchSpotifyCascade:
         assert rejected is not None
         assert rejected["fetched_title"] == "Close but no cigar"
         assert rejected["match"] == 0.55
+
+
+class TestFirstTrackQuery:
+    """The shared step-3 derivation used by BOTH the auto-apply cascade
+    and the manual candidate panel, so their VA handling can't diverge."""
+
+    @patch("app._beatport_first_tracks")
+    def test_prefers_beatport_track_artist(self, mock_tracks):
+        from app import _first_track_query
+        mock_tracks.return_value = [{"name": "Gritty", "artists": "Milzee"}]
+        assert _first_track_query("Various Artists", "https://bp/x/1") == (
+            "Milzee", "Gritty")
+
+    @patch("app._beatport_first_tracks")
+    def test_falls_back_to_release_artist_when_track_artist_missing(self, mock_tracks):
+        from app import _first_track_query
+        mock_tracks.return_value = [{"name": "Gritty", "artists": ""}]
+        assert _first_track_query("Real Artist", "https://bp/x/1") == (
+            "Real Artist", "Gritty")
+
+    @patch("app._beatport_first_tracks", return_value=[])
+    def test_returns_none_without_tracks(self, mock_tracks):
+        from app import _first_track_query
+        assert _first_track_query("A", "https://bp/x/1") is None
+
+    @patch("app._first_track_query", return_value=("Milzee", "Gritty"))
+    @patch("app.search_spotify", return_value=[])
+    def test_candidate_panel_uses_shared_derivation(self, mock_search, mock_ftq):
+        # The 🔍 panel must build its step-3 query from the same helper —
+        # guard against the two cascades drifting apart again.
+        from app import _collect_cascade_candidates
+        _collect_cascade_candidates("Various Artists", "Pioneers Five EP",
+                                    beatport_url="https://bp/x/1")
+        mock_ftq.assert_called_once_with("Various Artists", "https://bp/x/1")
+        # And the beatport sub-searches use the derived track artist+title.
+        bp_queries = [c.args[0] for c in mock_search.call_args_list
+                      if "Milzee" in c.args[0]]
+        assert bp_queries and all("Gritty" in q for q in bp_queries)
 
 
 class TestMissingCanonicalSections:

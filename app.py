@@ -358,23 +358,15 @@ def _search_spotify_cascade(artist, title, beatport_url="", threshold=0.6):
             return best, best_rejected
         _track_rejected(best)
 
-    # Step 3: if beatport URL provided, look up first track and retry. For
-    # compilations the release "artist" is generic ("Various Artists",
-    # "VA") and confuses Spotify, so use the first track's actual artist
-    # when one is available.
+    # Step 3: if beatport URL provided, look up the first track and retry,
+    # searching + scoring against that track's real Beatport artist+title
+    # (see _first_track_query — this is what recovers VA/compilation and
+    # multi-artist releases whose release-level artist confuses Spotify).
     if beatport_url:
-        tracks = _beatport_first_tracks(beatport_url)
-        if tracks:
-            first = tracks[0]
-            search_artist = artist
-            if _is_various_artists(artist) and first.get("artists"):
-                search_artist = first["artists"]
-            track_query = f"{search_artist} {first['name']}".strip()
-            # Score candidates against the first track's real artist+title
-            # too — otherwise a "Various Artists" release will always
-            # score badly against the actual track artist.
-            score_against_artist = search_artist
-            score_against_title = first["name"]
+        step3 = _first_track_query(artist, beatport_url)
+        if step3:
+            score_against_artist, score_against_title = step3
+            track_query = f"{score_against_artist} {score_against_title}".strip()
 
             results = search_spotify(track_query, "album")
             if results:
@@ -454,14 +446,10 @@ def _collect_cascade_candidates(artist: str, title: str, beatport_url: str = "",
         _add(_best_match(results, artist, title), "track_search")
 
     if beatport_url:
-        tracks = _beatport_first_tracks(beatport_url)
-        if tracks:
-            first = tracks[0]
-            search_artist = artist
-            if _is_various_artists(artist) and first.get("artists"):
-                search_artist = first["artists"]
-            track_query = f"{search_artist} {first['name']}".strip()
-            sa, st = search_artist, first["name"]
+        step3 = _first_track_query(artist, beatport_url)
+        if step3:
+            sa, st = step3
+            track_query = f"{sa} {st}".strip()
 
             # Use limit=10 and add every result so albums sharing the same
             # first track all surface as candidates rather than the top-1 only.
@@ -511,9 +499,29 @@ def _search_spotify_raw_candidates(query: str, score_artist: str, score_title: s
     return candidates[:n]
 
 
-def _is_various_artists(artist: str) -> bool:
-    a = (artist or "").strip().lower()
-    return a in {"various artists", "various", "va", "v/a", "v.a."}
+def _first_track_query(artist: str, beatport_url: str):
+    """Derive the step-3 (search_artist, track_title) from the release's
+    first Beatport track — the single shared basis for BOTH the auto-apply
+    cascade (`_search_spotify_cascade`) and the manual 🔍 candidate panel
+    (`_collect_cascade_candidates`), so the two can't drift apart.
+
+    Always prefers the first track's Beatport artist over the release-level
+    Reddit artist. Beatport's per-track artist is authoritative for the
+    track we're actually searching for, whereas the Reddit release artist
+    is 'Various Artists', a label name, or a concatenated multi-artist
+    string for compilations and multi-artist EPs — none of which match the
+    real track, which is why VA/compilation releases were unreliable.
+    (This replaces an earlier gate that only swapped on a literal 'Various
+    Artists' string and so missed comps not labelled exactly that.) Falls
+    back to the Reddit artist only when Beatport supplies no track artist.
+
+    Returns None when the release has no resolvable Beatport tracks.
+    """
+    tracks = _beatport_first_tracks(beatport_url)
+    if not tracks:
+        return None
+    first = tracks[0]
+    return (first.get("artists") or artist), first["name"]
 
 
 def _beatport_first_tracks(beatport_url: str) -> list[dict]:
