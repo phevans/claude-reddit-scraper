@@ -715,6 +715,61 @@ class TestFirstTrackQuery:
         assert bp_queries and all("Gritty" in q for q in bp_queries)
 
 
+class TestCascadeRegressionCases:
+    """Real VA/compilation releases the user flagged as cascade regressions
+    (Euphoria Vol 1, Metal Box). Uses the REAL scoring (only search_spotify
+    + the Beatport first-track lookup are stubbed, with data captured from
+    the live APIs) so a future change that breaks these lookups fails here.
+    Expected Spotify albums are the ones the user confirmed as correct."""
+
+    def _cascade(self, album_results, first_track):
+        """Run the cascade with album-search stubbed to album_results and
+        the Beatport first track stubbed. Track searches return nothing so
+        the step-1 album match is what's exercised."""
+        from app import _search_spotify_cascade
+
+        def _search(query, search_type, limit=5):
+            return album_results if search_type == "album" else []
+
+        with patch("app._beatport_first_tracks", return_value=[first_track]), \
+                patch("app.search_spotify", side_effect=_search):
+            return _search_spotify_cascade(
+                "Various Artists", self._title,
+                beatport_url=self._bp)[0]
+
+    def test_euphoria_vol_1(self):
+        self._title = "Euphoria Vol 1"
+        self._bp = "https://www.beatport.com/release/euphoria-vol-1/7059469"
+        result = self._cascade(
+            album_results=[
+                {"name": "Euphoria: Vol 1", "artists": "Various Artists",
+                 "url": "https://open.spotify.com/album/7uamW1Iph9HwU0MyG1XfZP"},
+                {"name": "Euphoria, Vol. 1", "artists": "Various Artists",
+                 "url": "https://open.spotify.com/album/6ktS94KtOEBKugfop9rD6u"},
+                {"name": "EUPHORIA", "artists": "Kaskade",
+                 "url": "https://open.spotify.com/album/5nefAD1EsXbLksNfBJorPV"},
+            ],
+            first_track={"name": "Deep End", "artists": "Wolters"},
+        )
+        assert result is not None
+        assert result["url"].endswith("7uamW1Iph9HwU0MyG1XfZP")
+
+    def test_metal_box(self):
+        self._title = "Metal Box"
+        self._bp = "https://www.beatport.com/release/metal-box/7085532"
+        result = self._cascade(
+            album_results=[
+                {"name": "Metal Box", "artists": "Various Artists",
+                 "url": "https://open.spotify.com/album/1tKrz4F7JApyXHhSG2yjj1"},
+                {"name": "Amber Dusk", "artists": "Caelestis Nati",
+                 "url": "https://open.spotify.com/album/3VYJLM1oXQV0o9RTlVSrfA"},
+            ],
+            first_track={"name": "Hyst", "artists": "Monyu"},
+        )
+        assert result is not None
+        assert result["url"].endswith("1tKrz4F7JApyXHhSG2yjj1")
+
+
 class TestMissingCanonicalSections:
     """The post-scrape coverage check: an NMM post should contain all
     7 canonical subgenres. If one is missing after classification, the

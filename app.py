@@ -35,7 +35,7 @@ from playlist_config import (
     classify_section,
     lookup_spotify_playlists,
 )
-from reddit_client import get_latest_nmm_post
+from reddit_client import get_latest_nmm_post, get_latest_nmm_post_info
 from spotify_client import compute_similarity, search_spotify, verify_spotify_link
 from spotify_playlist import (
     add_tracks_to_playlist as spotify_add_tracks_to_playlist,
@@ -584,6 +584,18 @@ def auth_status():
         "spotify": spotify_is_authenticated(),
         "beatport": beatport_is_authenticated(),
     })
+
+
+@app.route("/latest-post")
+def latest_post():
+    """Metadata for the current NMM post (title, date, Reddit link) so the
+    page can show at a glance whether this week's post is up — without
+    running a full scrape. Degrades to {found: false} on any Reddit error
+    so the banner never breaks the page."""
+    try:
+        return jsonify(get_latest_nmm_post_info())
+    except Exception:
+        return jsonify({"found": False})
 
 
 @app.route("/spotify/authorize-url")

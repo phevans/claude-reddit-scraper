@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from reddit_client import get_latest_nmm_post
+from reddit_client import get_latest_nmm_post, get_latest_nmm_post_info
 
 
 FAKE_ENV = {
@@ -192,3 +192,46 @@ class TestGetLatestNmmPost:
 
         with pytest.raises(ValueError, match="No weekly roundup post"):
             get_latest_nmm_post()
+
+
+class TestGetLatestNmmPostInfo:
+    @patch.dict("os.environ", FAKE_ENV)
+    @patch("reddit_client.praw.Reddit")
+    def test_returns_metadata_of_latest_roundup(self, mock_reddit_class):
+        mock_reddit = MagicMock()
+        mock_reddit_class.return_value = mock_reddit
+
+        post = MagicMock()
+        post.title = "Fresh Music! ... | New Music Monday! (Week 27)"
+        post.selftext_html = "<h1>New Releases</h1>"
+        post.crosspost_parent = None
+        post.permalink = "/r/DnB/comments/1uov8fk/fresh_music/"
+        post.created_utc = 1_752_192_000  # 2025-07-11 UTC
+
+        mock_user = MagicMock()
+        mock_user.submissions.new.return_value = [post]
+        mock_reddit.redditor.return_value = mock_user
+
+        info = get_latest_nmm_post_info()
+        assert info["found"] is True
+        assert info["title"] == post.title
+        assert info["url"] == "https://www.reddit.com/r/DnB/comments/1uov8fk/fresh_music/"
+        assert info["posted"] == "2025-07-11"
+
+    @patch.dict("os.environ", FAKE_ENV)
+    @patch("reddit_client.praw.Reddit")
+    def test_returns_not_found_when_no_roundup(self, mock_reddit_class):
+        mock_reddit = MagicMock()
+        mock_reddit_class.return_value = mock_reddit
+
+        post = MagicMock()
+        post.selftext_html = "<p>not a roundup</p>"
+        post.crosspost_parent = None
+
+        mock_user = MagicMock()
+        mock_user.submissions.new.return_value = [post]
+        mock_reddit.redditor.return_value = mock_user
+        # Empty subreddit search fallback.
+        mock_reddit.subreddit.return_value.search.return_value = []
+
+        assert get_latest_nmm_post_info() == {"found": False}

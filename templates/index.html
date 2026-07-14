@@ -177,6 +177,8 @@
     <div class="container py-4">
         <h1 class="mb-4" id="top">DnB New Music Monday <small class="text-muted" style="font-size:0.5em">v{{ version }}</small></h1>
 
+        <div id="latest-post" class="alert alert-secondary py-2 mb-4" style="display: none;"></div>
+
         <button id="run-btn" class="btn btn-primary btn-lg mb-4" onclick="startScrape()">Run</button>
 
         <div id="progress-area" class="mb-4" style="display: none;">
@@ -659,7 +661,30 @@
     // appear immediately, without waiting for a scrape to finish.
     document.addEventListener('DOMContentLoaded', function() {
         checkAuthStatus();
+        loadLatestPost();
     });
+
+    function loadLatestPost() {
+        const el = document.getElementById('latest-post');
+        fetch('/latest-post')
+            .then(r => r.json())
+            .then(data => {
+                if (data && data.found) {
+                    const title = (data.title || 'Latest post')
+                        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const posted = data.posted ? ' &middot; posted ' + data.posted : '';
+                    el.className = 'alert alert-info py-2 mb-4';
+                    el.innerHTML = '📻 <strong>Latest NMM post:</strong> ' +
+                        '<a href="' + data.url + '" target="_blank" rel="noopener">' + title + '</a>' +
+                        '<span class="text-muted">' + posted + '</span>';
+                } else {
+                    el.className = 'alert alert-warning py-2 mb-4';
+                    el.textContent = 'No New Music Monday post found yet.';
+                }
+                el.style.display = 'block';
+            })
+            .catch(() => { el.style.display = 'none'; });
+    }
 
     window.addEventListener('focus', checkAuthStatus);
     document.addEventListener('visibilitychange', function() {
