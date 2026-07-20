@@ -52,7 +52,7 @@
                             {% if is_auto %}<div class="link-match-score">{{ service }} {{ "%.2f"|format(match) }}{% if match_artists %} — {{ match_artists }}{% endif %} — {{ fetched_title }}</div>{% endif %}
                         </div>
                         {% else %}
-                        <div class="link-box {% if match >= 0.7 %}link-match-partial{% else %}link-match-poor{% endif %} mb-1" data-service="{{ service }}"{% if service == "Spotify" %} data-orig-url="{{ release.links[service] }}" data-orig-match="{{ match }}" data-orig-title="{{ fetched_title or '' }}" data-orig-artists="{{ match_artists or '' }}" data-orig-auto="{{ 'true' if is_auto else 'false' }}"{% endif %}>
+                        <div class="link-box {% if match >= 0.8 %}link-match-exact{% elif match >= 0.5 %}link-match-partial{% else %}link-match-poor{% endif %} mb-1" data-service="{{ service }}"{% if service == "Spotify" %} data-orig-url="{{ release.links[service] }}" data-orig-match="{{ match }}" data-orig-title="{{ fetched_title or '' }}" data-orig-artists="{{ match_artists or '' }}" data-orig-auto="{{ 'true' if is_auto else 'false' }}"{% endif %}>
                             <div class="link-box-content">
                                 {% if is_auto %}<span class="link-auto-badge" title="Auto-found by Spotify search">auto</span>{% endif %}
                                 <a href="{{ release.links[service] }}" target="_blank" rel="noopener">{{ release.links[service] }}</a>

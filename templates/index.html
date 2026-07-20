@@ -409,9 +409,9 @@
                 if (oldScore) oldScore.remove();
 
                 if (data.match !== null && data.match !== undefined) {
-                    if (data.match === 1.0) {
+                    if (data.match >= 0.8) {
                         linkBox.className = 'link-box link-match-exact mb-1';
-                    } else if (data.match >= 0.7) {
+                    } else if (data.match >= 0.5) {
                         linkBox.className = 'link-box link-match-partial mb-1';
                     } else {
                         linkBox.className = 'link-box link-match-poor mb-1';
@@ -500,7 +500,7 @@
                     candidatesEl.innerHTML = '<div class="text-muted" style="font-size:0.75rem">No matches found.</div>';
                 } else {
                     items.forEach(c => {
-                        const scoreColor = c.match >= 0.8 ? '#198754' : c.match >= 0.6 ? '#856404' : '#842029';
+                        const scoreColor = c.match >= 0.8 ? '#198754' : c.match >= 0.5 ? '#856404' : '#842029';
                         const sourceLabel = (c.source || '').replace(/_/g, ' ');
                         const item = document.createElement('div');
                         item.className = 'search-candidate';
@@ -565,9 +565,9 @@
 
         if (origMatch === null || isNaN(origMatch)) {
             linkBox.className = 'link-box link-unchecked mb-1';
-        } else if (origMatch >= 1.0) {
+        } else if (origMatch >= 0.8) {
             linkBox.className = 'link-box link-match-exact mb-1';
-        } else if (origMatch >= 0.7) {
+        } else if (origMatch >= 0.5) {
             linkBox.className = 'link-box link-match-partial mb-1';
         } else {
             linkBox.className = 'link-box link-match-poor mb-1';
@@ -611,9 +611,9 @@
         const oldScore = linkBox.querySelector('.link-match-score');
         if (oldScore) oldScore.remove();
 
-        if (data.match >= 1.0) {
+        if (data.match >= 0.8) {
             linkBox.className = 'link-box link-match-exact mb-1';
-        } else if (data.match >= 0.7) {
+        } else if (data.match >= 0.5) {
             linkBox.className = 'link-box link-match-partial mb-1';
         } else {
             linkBox.className = 'link-box link-match-poor mb-1';
