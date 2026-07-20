@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dj-directory",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/phil/Code/dj-directory && npx next dev"],
+      "port": 3000
+    }
+  ]
+}
